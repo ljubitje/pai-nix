@@ -9,15 +9,13 @@
 
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "personal-ai-infrastructure";
-  version = "2.5.0";
+  version = "4.0.3";
 
   src = fetchFromGitHub {
     owner = "danielmiessler";
     repo = "Personal_AI_Infrastructure";
     tag = "v${finalAttrs.version}";
-    # Run `nix-prefetch-url --unpack https://github.com/danielmiessler/Personal_AI_Infrastructure/archive/refs/tags/v2.5.0.tar.gz`
-    # or `nix store prefetch-file --hash-type sha256 --unpack <url>` to get this value.
-    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    hash = "sha256-z/jRCFkRPzaFh4mk/mQtro2iw3ARViQPmUVgBVqzuqY=";
   };
 
   nativeBuildInputs = [ makeWrapper ];
@@ -57,7 +55,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
     echo "Running configuration wizard..."
     cd "$HOME/.claude"
-    exec ${bun}/bin/bun run INSTALL.ts
+    exec bash "$HOME/.claude/install.sh"
     EOF
 
     # Substitute the real store path.
@@ -80,10 +78,10 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       then restart Claude Code to activate the hooks.
     '';
     homepage = "https://github.com/danielmiessler/Personal_AI_Infrastructure";
-    changelog = "https://github.com/danielmiessler/Personal_AI_Infrastructure/blob/v${finalAttrs.version}/Releases/v${lib.versions.majorMinor finalAttrs.version}/README.md";
+    changelog = "https://github.com/danielmiessler/Personal_AI_Infrastructure/blob/v${finalAttrs.version}/Releases/v${finalAttrs.version}/README.md";
     license = licenses.mit;
     maintainers = with maintainers; [
-      # YOUR_NIXPKGS_HANDLE  <-- you'll add yourself here
+      ljubitje
     ];
     platforms = platforms.unix;
     mainProgram = "pai-install";
