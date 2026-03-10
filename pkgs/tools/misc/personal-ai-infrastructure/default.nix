@@ -61,17 +61,22 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       cp -r "$PAI_SHARE" "$HOME/.claude"
       chmod -R u+w "$HOME/.claude"
 
-      # Patch all bare "bun" references to use the Nix store path.
-      # install.sh scripts use "exec bun run ..." and "command -v bun" etc.
-      for f in "$HOME/.claude/install.sh" "$HOME/.claude/PAI-Install/install.sh"; do
-        if [ -f "$f" ]; then
-          sed -i 's|exec bun |exec @bun@/bin/bun |g' "$f"
-        fi
+      # Patch ALL bare "bun" references to use the Nix store path.
+      # Covers install scripts, electron launcher, PAI-Install engine,
+      # hook handlers, PAI tools, and shebangs.
+      BUN="@bun@/bin/bun"
+      for f in $(find "$HOME/.claude" -type f \( -name '*.sh' -o -name '*.ts' -o -name '*.js' \) ! -path '*/node_modules/*'); do
+        sed -i \
+          -e "s|exec bun |exec $BUN |g" \
+          -e "s|#!/usr/bin/env bun|#!$BUN|g" \
+          -e "s|spawn(\"bun\"|spawn(\"$BUN\"|g" \
+          -e "s|spawn('bun'|spawn('$BUN'|g" \
+          -e "s|spawnSync(\\[\"bun\"|spawnSync([\"$BUN\"|g" \
+          -e "s|nodeSpawn('bun'|nodeSpawn('$BUN'|g" \
+          -e "s|tryExec(\"bun |tryExec(\"$BUN |g" \
+          -e "s|alias pai='bun |alias pai='$BUN |g" \
+          "$f"
       done
-      # Patch electron GUI launcher to use Nix bun path.
-      if [ -f "$HOME/.claude/PAI-Install/electron/main.js" ]; then
-        sed -i 's|spawn("bun"|spawn("@bun@/bin/bun"|g' "$HOME/.claude/PAI-Install/electron/main.js"
-      fi
 
       # Lock file so we can detect interrupted installs.
       touch "$PAI_INSTALLING"
@@ -86,11 +91,17 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       # Run upstream install.sh (handles banner, checks, and launcher).
       bash "$HOME/.claude/install.sh"
 
-      # Patch hook commands to use Nix store paths for bun.
-      # Done AFTER install.sh so the installer can't overwrite the patches.
+      # Post-install patches: fix anything install.sh generated/overwrote.
+      # Patch hook commands in settings.json.
       if [ -f "$HOME/.claude/settings.json" ]; then
-        sed -i 's|"command": "bun |"command": "@bun@/bin/bun |g' "$HOME/.claude/settings.json"
+        sed -i "s|\"command\": \"bun |\"command\": \"$BUN |g" "$HOME/.claude/settings.json"
       fi
+      # Replace the shell alias to use the Nix pai wrapper instead of bare bun.
+      for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        if [ -f "$rc" ]; then
+          sed -i "s|alias pai='.*bun.*/pai\\.ts'|alias pai='@out@/bin/pai'|g" "$rc"
+        fi
+      done
 
       # Install succeeded — remove lock, write version marker.
       rm -f "$PAI_INSTALLING"
