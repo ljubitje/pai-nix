@@ -15,7 +15,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     owner = "ljubitje";
     repo = "Personal_AI_Infrastructure";
     tag = "v${finalAttrs.version}";
-    hash = "sha256-z/jRCFkRPzaFh4mk/mQtro2iw3ARViQPmUVgBVqzuqY=";
+    hash = "sha256-z/PAJYCP57SCESp4rcaZH8ibh8fuhl+5azvlinc1J6iHo=";
   };
 
   nativeBuildInputs = [ makeWrapper ];
