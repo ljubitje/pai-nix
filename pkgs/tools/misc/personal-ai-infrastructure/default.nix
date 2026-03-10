@@ -61,9 +61,16 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       cp -r "$PAI_SHARE" "$HOME/.claude"
       chmod -R u+w "$HOME/.claude"
 
-      # Patch hook commands to use Nix store paths for bun.
-      if [ -f "$HOME/.claude/settings.json" ]; then
-        sed -i 's|"command": "bun |"command": "@bun@/bin/bun |g' "$HOME/.claude/settings.json"
+      # Patch all bare "bun" references to use the Nix store path.
+      # install.sh scripts use "exec bun run ..." and "command -v bun" etc.
+      for f in "$HOME/.claude/install.sh" "$HOME/.claude/PAI-Install/install.sh"; do
+        if [ -f "$f" ]; then
+          sed -i 's|exec bun |exec @bun@/bin/bun |g' "$f"
+        fi
+      done
+      # Patch electron GUI launcher to use Nix bun path.
+      if [ -f "$HOME/.claude/PAI-Install/electron/main.js" ]; then
+        sed -i 's|spawn("bun"|spawn("@bun@/bin/bun"|g' "$HOME/.claude/PAI-Install/electron/main.js"
       fi
 
       # Lock file so we can detect interrupted installs.
@@ -78,6 +85,12 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       ln -sf "@electron@/bin/electron" node_modules/electron/dist/electron
       # Run upstream install.sh (handles banner, checks, and launcher).
       bash "$HOME/.claude/install.sh"
+
+      # Patch hook commands to use Nix store paths for bun.
+      # Done AFTER install.sh so the installer can't overwrite the patches.
+      if [ -f "$HOME/.claude/settings.json" ]; then
+        sed -i 's|"command": "bun |"command": "@bun@/bin/bun |g' "$HOME/.claude/settings.json"
+      fi
 
       # Install succeeded — remove lock, write version marker.
       rm -f "$PAI_INSTALLING"
