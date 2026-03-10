@@ -42,6 +42,14 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     PAI_MARKER="$HOME/.claude/.pai-version"
     PAI_INSTALLING="$HOME/.claude/.pai-installing"
 
+    # Always remove the upstream shell alias that uses bare bun.
+    # The Nix pai wrapper on PATH is the correct entrypoint.
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+      if [ -f "$rc" ] && grep -q "alias pai='.*bun.*/pai\.ts'" "$rc"; then
+        sed -i '/# PAI alias/d;/alias pai=.*bun.*pai\.ts/d' "$rc"
+      fi
+    done
+
     # Auto-install or upgrade if needed.
     pai_install() {
       # Guard against re-entering a stuck install; let the user bypass.
