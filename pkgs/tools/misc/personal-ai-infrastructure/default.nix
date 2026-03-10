@@ -6,6 +6,9 @@
   electron,
   makeWrapper,
   bash,
+  nodejs,
+  git,
+  curl,
 }:
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "personal-ai-infrastructure";
@@ -17,7 +20,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     hash = "sha256-c6OR1wlAObdfTPg9/CkBBNM/c7V9CGWnM/nX+AmLALk=";
   };
   nativeBuildInputs = [ makeWrapper ];
-  buildInputs = [ bun ];
+  buildInputs = [ bun nodejs git curl electron ];
   # No build step — PAI is config files + a Bun setup wizard.
   dontBuild = true;
   dontConfigure = true;
@@ -32,7 +35,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     cat > $out/bin/pai-install << 'EOF'
     #!${bash}/bin/bash
     set -euo pipefail
-    export PATH="@bun@/bin:$PATH"
+    export PATH="@bun@/bin:@nodejs@/bin:@git@/bin:@curl@/bin:$PATH"
     PAI_SHARE="@out@/share/personal-ai-infrastructure/.claude"
     if [ -d "$HOME/.claude" ]; then
       BACKUP="$HOME/.claude-backup-$(date +%Y%m%d-%H%M%S)"
@@ -53,6 +56,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     substituteInPlace $out/bin/pai-install \
       --replace '@out@' "$out" \
       --replace '@bun@' "${bun}" \
+      --replace '@nodejs@' "${nodejs}" \
+      --replace '@git@' "${git}" \
+      --replace '@curl@' "${curl}" \
       --replace '@electron@' "${electron}"
     chmod +x $out/bin/pai-install
     runHook postInstall
