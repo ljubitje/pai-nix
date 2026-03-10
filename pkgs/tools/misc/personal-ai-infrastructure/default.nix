@@ -17,7 +17,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     owner = "ljubitje";
     repo = "Personal_AI_Infrastructure";
     tag = "v${finalAttrs.version}";
-    hash = "sha256-c6OR1wlAObdfTPg9/CkBBNM/c7V9CGWnM/nX+AmLALk=";
+    hash = "sha256-Kbo9Hnm4LxCIVZTxO8VNEC2LES3syjTYPcm6C9sTsqU=";
   };
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl electron ];
