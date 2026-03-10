@@ -49,6 +49,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     cd "$HOME/.claude/PAI-Install/electron"
     npm install --ignore-scripts 2>/dev/null
     mkdir -p node_modules/electron/dist
+    printf "electron" > node_modules/electron/path.txt
     ln -sf "@electron@/bin/electron" node_modules/electron/dist/electron
     # Hand off to upstream install.sh (handles banner, checks, and launcher)
     exec bash "$HOME/.claude/install.sh"
