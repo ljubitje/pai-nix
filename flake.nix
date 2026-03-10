@@ -7,7 +7,7 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = import nixpkgs { inherit system; config.allowUnfree = true; };
       in
       {
         packages.default = pkgs.callPackage ./pkgs/tools/misc/personal-ai-infrastructure { };
