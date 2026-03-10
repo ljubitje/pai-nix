@@ -31,7 +31,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
     # Install the release template into the Nix store so users can reference it.
     install -dm755 $out/share/personal-ai-infrastructure
-    cp -r Releases/v${finalAttrs.version}/.claude $out/share/personal-ai-infrastructure/
+    cp -r Releases/v4.0.3/.claude $out/share/personal-ai-infrastructure/
 
     # Install the wrapper script.
     install -dm755 $out/bin
