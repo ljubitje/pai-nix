@@ -12,7 +12,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   version = "4.0.3";
 
   src = fetchFromGitHub {
-    owner = "danielmiessler";
+    owner = "ljubitje";
     repo = "Personal_AI_Infrastructure";
     tag = "v${finalAttrs.version}";
     hash = "sha256-z/jRCFkRPzaFh4mk/mQtro2iw3ARViQPmUVgBVqzuqY=";
