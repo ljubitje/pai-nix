@@ -32,31 +32,78 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     cp -r Releases/v4.0.3/.claude $out/share/personal-ai-infrastructure/
     # Install the wrapper script.
     install -dm755 $out/bin
-    # pai-install: copies the .claude template into $HOME and then runs the wizard.
-    cat > $out/bin/pai-install << 'EOF'
+    # pai: auto-installs on first run, then launches claude-code with deps on PATH.
+    cat > $out/bin/pai << 'WRAPPER'
     #!/@bash@/bin/bash
     set -euo pipefail
     export PATH="@bun@/bin:@nodejs@/bin:@git@/bin:@curl@/bin:@claude-code@/bin:$PATH"
+
     PAI_SHARE="@out@/share/personal-ai-infrastructure/.claude"
-    if [ -d "$HOME/.claude" ]; then
-      BACKUP="$HOME/.claude-backup-$(date +%Y%m%d-%H%M%S)"
-      echo "Backing up existing ~/.claude to $BACKUP"
-      mv "$HOME/.claude" "$BACKUP"
+    PAI_MARKER="$HOME/.claude/.pai-version"
+    PAI_INSTALLING="$HOME/.claude/.pai-installing"
+
+    # Auto-install or upgrade if needed.
+    pai_install() {
+      # Guard against re-entering a stuck install; let the user bypass.
+      if [ -f "$PAI_INSTALLING" ]; then
+        echo "⚠  A previous PAI install was interrupted."
+        echo "   Run 'pai --force-install' to retry, or 'pai --skip-install' to launch anyway."
+        exit 1
+      fi
+
+      if [ -d "$HOME/.claude" ]; then
+        BACKUP="$HOME/.claude-backup-$(date +%Y%m%d-%H%M%S)"
+        echo "Backing up existing ~/.claude to $BACKUP"
+        mv "$HOME/.claude" "$BACKUP"
+      fi
+
+      echo "Installing PAI v@version@ to ~/.claude ..."
+      cp -r "$PAI_SHARE" "$HOME/.claude"
+      chmod -R u+w "$HOME/.claude"
+
+      # Lock file so we can detect interrupted installs.
+      touch "$PAI_INSTALLING"
+      trap 'echo ""; echo "⚠  Install interrupted. Run \"pai\" again to retry."' EXIT
+
+      # Install electron JS deps and use Nix-provided electron binary.
+      cd "$HOME/.claude/PAI-Install/electron"
+      npm install --ignore-scripts 2>/dev/null
+      mkdir -p node_modules/electron/dist
+      printf "electron" > node_modules/electron/path.txt
+      ln -sf "@electron@/bin/electron" node_modules/electron/dist/electron
+      # Run upstream install.sh (handles banner, checks, and launcher).
+      bash "$HOME/.claude/install.sh"
+
+      # Install succeeded — remove lock, write version marker.
+      rm -f "$PAI_INSTALLING"
+      trap - EXIT
+      echo "@version@" > "$PAI_MARKER"
+    }
+
+    # Handle flags.
+    case "''${1:-}" in
+      --force-install)
+        rm -f "$PAI_INSTALLING"
+        pai_install
+        exec claude "''${@:2}"
+        ;;
+      --skip-install)
+        exec claude "''${@:2}"
+        ;;
+    esac
+
+    if [ ! -f "$PAI_MARKER" ]; then
+      pai_install
+    elif [ "$(cat "$PAI_MARKER")" != "@version@" ]; then
+      echo "PAI upgrade detected ($(cat "$PAI_MARKER") → @version@)"
+      pai_install
     fi
-    echo "Installing PAI v4.0.3 to ~/.claude ..."
-    cp -r "$PAI_SHARE" "$HOME/.claude"
-    chmod -R u+w "$HOME/.claude"
-    # Install electron JS deps and use Nix-provided electron binary
-    cd "$HOME/.claude/PAI-Install/electron"
-    npm install --ignore-scripts 2>/dev/null
-    mkdir -p node_modules/electron/dist
-    printf "electron" > node_modules/electron/path.txt
-    ln -sf "@electron@/bin/electron" node_modules/electron/dist/electron
-    # Hand off to upstream install.sh (handles banner, checks, and launcher)
-    exec bash "$HOME/.claude/install.sh"
-    EOF
+
+    # Launch claude-code, forwarding all arguments.
+    exec claude "$@"
+    WRAPPER
     # Substitute the real store paths.
-    substituteInPlace $out/bin/pai-install \
+    substituteInPlace $out/bin/pai \
       --replace '@out@' "$out" \
       --replace '@bash@' "${bash}" \
       --replace '@bun@' "${bun}" \
@@ -64,8 +111,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       --replace '@git@' "${git}" \
       --replace '@curl@' "${curl}" \
       --replace '@electron@' "${electron}" \
-      --replace '@claude-code@' "${claude-code}"
-    chmod +x $out/bin/pai-install
+      --replace '@claude-code@' "${claude-code}" \
+      --replace '@version@' "${finalAttrs.version}"
+    chmod +x $out/bin/pai
     runHook postInstall
   '';
   meta = with lib; {
@@ -74,8 +122,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       Personal AI Infrastructure (PAI) is a modular configuration system for Claude Code.
       It adds persistent memory, a skill system, event-driven hooks, goal tracking (TELOS),
       and a continuous-learning loop on top of Claude Code's agentic capabilities.
-      After installing this package, run `pai-install` once to set up your ~/.claude directory,
-      then restart Claude Code to activate the hooks.
+      Run `pai` to get started — it auto-installs on first run, then launches Claude Code
+      with all PAI hooks and tools active.
     '';
     homepage = "https://github.com/danielmiessler/Personal_AI_Infrastructure";
     changelog = "https://github.com/danielmiessler/Personal_AI_Infrastructure/blob/v${finalAttrs.version}/Releases/v4.0.3/README.md";
@@ -84,6 +132,6 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       ljubitje
     ];
     platforms = platforms.unix;
-    mainProgram = "pai-install";
+    mainProgram = "pai";
   };
 })
