@@ -9,7 +9,7 @@
 
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "personal-ai-infrastructure";
-  version = "4.0.3";
+  version = "4.0.3-nixos";
 
   src = fetchFromGitHub {
     owner = "ljubitje";
