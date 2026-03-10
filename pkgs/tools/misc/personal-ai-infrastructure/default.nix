@@ -9,6 +9,7 @@
   nodejs,
   git,
   curl,
+  jq,
   claude-code,
 }:
 stdenvNoCC.mkDerivation (finalAttrs: {
@@ -21,7 +22,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     hash = "sha256-muM6Y+lyEqTpgkkJNxy6NzxROaG9uvJTdQwOWzC0eJM=";
   };
   nativeBuildInputs = [ makeWrapper ];
-  buildInputs = [ bun nodejs git curl electron claude-code ];
+  buildInputs = [ bun nodejs git curl jq electron claude-code ];
   # No build step — PAI is config files + a Bun setup wizard.
   dontBuild = true;
   dontConfigure = true;
@@ -36,7 +37,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     cat > $out/bin/pai << 'WRAPPER'
     #!/@bash@/bin/bash
     set -euo pipefail
-    export PATH="@bun@/bin:@nodejs@/bin:@git@/bin:@curl@/bin:@claude-code@/bin:$PATH"
+    export PATH="@bun@/bin:@nodejs@/bin:@git@/bin:@curl@/bin:@jq@/bin:@claude-code@/bin:$PATH"
 
     PAI_SHARE="@out@/share/personal-ai-infrastructure/.claude"
     PAI_MARKER="$HOME/.claude/.pai-version"
@@ -147,6 +148,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       --replace '@nodejs@' "${nodejs}" \
       --replace '@git@' "${git}" \
       --replace '@curl@' "${curl}" \
+      --replace '@jq@' "${jq}" \
       --replace '@electron@' "${electron}" \
       --replace '@claude-code@' "${claude-code}" \
       --replace '@version@' "${finalAttrs.version}"
