@@ -19,7 +19,7 @@
       }
     ) // {
       nixosModules.pai = { pkgs, system ? pkgs.stdenv.hostPlatform.system, ... }: {
-        environment.systemPackages = [ self.packages.${system}.default ];
+        environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.default ];
       };
     };
 }
