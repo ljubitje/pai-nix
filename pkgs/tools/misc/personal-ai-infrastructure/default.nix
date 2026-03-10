@@ -3,6 +3,7 @@
   stdenvNoCC,
   fetchFromGitHub,
   bun,
+  electron,
   makeWrapper,
   bash,
 }:
@@ -42,13 +43,17 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     cp -r "$PAI_SHARE" "$HOME/.claude"
     chmod -R u+w "$HOME/.claude"
     echo "Running configuration wizard..."
+    cd "$HOME/.claude/PAI-Install"
+    npm install
+    ln -sf "@electron@/bin/electron" node_modules/electron/dist/electron
     cd "$HOME/.claude"
     exec bash "$HOME/.claude/install.sh"
     EOF
     # Substitute the real store paths.
     substituteInPlace $out/bin/pai-install \
       --replace '@out@' "$out" \
-      --replace '@bun@' "${bun}"
+      --replace '@bun@' "${bun}" \
+      --replace '@electron@' "${electron}"
     chmod +x $out/bin/pai-install
     runHook postInstall
   '';
