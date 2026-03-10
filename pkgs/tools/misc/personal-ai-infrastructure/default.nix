@@ -61,6 +61,11 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       cp -r "$PAI_SHARE" "$HOME/.claude"
       chmod -R u+w "$HOME/.claude"
 
+      # Patch hook commands to use Nix store paths for bun.
+      if [ -f "$HOME/.claude/settings.json" ]; then
+        sed -i 's|"command": "bun |"command": "@bun@/bin/bun |g' "$HOME/.claude/settings.json"
+      fi
+
       # Lock file so we can detect interrupted installs.
       touch "$PAI_INSTALLING"
       trap 'echo ""; echo "⚠  Install interrupted. Run \"pai\" again to retry."' EXIT
