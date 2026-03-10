@@ -33,7 +33,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     install -dm755 $out/bin
     # pai-install: copies the .claude template into $HOME and then runs the wizard.
     cat > $out/bin/pai-install << 'EOF'
-    #!${bash}/bin/bash
+    #!/@bash@/bin/bash
     set -euo pipefail
     export PATH="@bun@/bin:@nodejs@/bin:@git@/bin:@curl@/bin:$PATH"
     PAI_SHARE="@out@/share/personal-ai-infrastructure/.claude"
@@ -45,16 +45,18 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     echo "Installing PAI v4.0.3 to ~/.claude ..."
     cp -r "$PAI_SHARE" "$HOME/.claude"
     chmod -R u+w "$HOME/.claude"
-    echo "Running configuration wizard..."
-    cd "$HOME/.claude/PAI-Install"
-    npm install
+    # Install electron JS deps and use Nix-provided electron binary
+    cd "$HOME/.claude/PAI-Install/electron"
+    npm install --ignore-scripts 2>/dev/null
+    mkdir -p node_modules/electron/dist
     ln -sf "@electron@/bin/electron" node_modules/electron/dist/electron
-    cd "$HOME/.claude"
+    # Hand off to upstream install.sh (handles banner, checks, and launcher)
     exec bash "$HOME/.claude/install.sh"
     EOF
     # Substitute the real store paths.
     substituteInPlace $out/bin/pai-install \
       --replace '@out@' "$out" \
+      --replace '@bash@' "${bash}" \
       --replace '@bun@' "${bun}" \
       --replace '@nodejs@' "${nodejs}" \
       --replace '@git@' "${git}" \
