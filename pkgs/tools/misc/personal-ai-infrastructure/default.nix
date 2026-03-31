@@ -43,11 +43,12 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     PAI_MARKER="$HOME/.claude/.pai-version"
     PAI_INSTALLING="$HOME/.claude/.pai-installing"
 
-    # Always remove the upstream shell alias that uses bare bun.
-    # The Nix pai wrapper on PATH is the correct entrypoint.
+    # Always remove stale pai aliases from shell rc files.
+    # Catches both upstream bun aliases and old Nix store path aliases.
+    # The Nix pai wrapper on PATH is the correct entrypoint — no alias needed.
     for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-      if [ -f "$rc" ] && grep -q "alias pai='.*bun.*/pai\.ts'" "$rc"; then
-        sed -i '/# PAI alias/d;/alias pai=.*bun.*pai\.ts/d' "$rc"
+      if [ -f "$rc" ] && grep -q "alias pai=" "$rc"; then
+        sed -i '/# PAI alias/d;/alias pai=/d' "$rc"
       fi
     done
 
@@ -105,10 +106,11 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       if [ -f "$HOME/.claude/settings.json" ]; then
         sed -i "s|\"command\": \"bun |\"command\": \"$BUN |g" "$HOME/.claude/settings.json"
       fi
-      # Replace the shell alias to use the Nix pai wrapper instead of bare bun.
+      # Remove any pai alias install.sh may have written.
+      # The Nix wrapper is on PATH — no alias needed.
       for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
         if [ -f "$rc" ]; then
-          sed -i "s|alias pai='.*bun.*/pai\\.ts'|alias pai='@out@/bin/pai'|g" "$rc"
+          sed -i '/# PAI alias/d;/alias pai=/d' "$rc"
         fi
       done
 
