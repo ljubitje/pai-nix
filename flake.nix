@@ -8,7 +8,7 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; config.allowUnfree = true; };
-        claude-code = pkgs.callPackage ./pkgs/claude-code/package.nix { };
+        claude-code = pkgs.claude-code;
       in
       {
         packages.claude-code = claude-code;
