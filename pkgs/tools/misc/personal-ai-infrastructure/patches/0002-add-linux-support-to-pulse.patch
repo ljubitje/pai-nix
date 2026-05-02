@@ -1,0 +1,128 @@
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/manage.sh	2026-05-02 06:56:40.424889141 +0200
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/manage.sh	2026-05-02 07:00:44.427951210 +0200
+@@ -8,6 +8,13 @@
+ PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME.plist"
+ PID_FILE="$PULSE_DIR/state/pulse.pid"
+ STATE_FILE="$PULSE_DIR/state/state.json"
++LOG_DIR="$PULSE_DIR/logs"
++
++# Detect platform: macOS uses launchctl, Linux uses direct process management.
++IS_MACOS=false
++if [[ "$(uname -s)" == "Darwin" ]]; then
++  IS_MACOS=true
++fi
+ 
+ # Resolve bun's actual location for the launchd job. The public plist
+ # template ships with `__BUN_PATH__` so the job works for both brew users
+@@ -28,26 +35,49 @@
+   BUN_PATH="$(command -v bun || echo "$HOME/.bun/bin/bun")"
+ fi
+ 
++# ─── Helper: start Pulse directly as a background process (Linux) ────
++start_direct() {
++  mkdir -p "$LOG_DIR" "$PULSE_DIR/state"
++  nohup "$BUN_PATH" run "$PULSE_DIR/pulse.ts" \
++    >> "$LOG_DIR/pulse-stdout.log" \
++    2>> "$LOG_DIR/pulse-stderr.log" &
++  echo $! > "$PID_FILE"
++}
++
++# ─── Helper: stop Pulse by PID file ────
++stop_direct() {
++  if [ -f "$PID_FILE" ]; then
++    PID=$(cat "$PID_FILE")
++    kill "$PID" 2>/dev/null
++    rm -f "$PID_FILE"
++    echo "PAI Pulse stopped (PID $PID)"
++  else
++    # Try to find and kill by process name
++    pkill -f "bun.*pulse.ts" 2>/dev/null || true
++    echo "PAI Pulse stopped"
++  fi
++}
++
+ case "$1" in
+   start)
+-    if [ ! -f "$PLIST_DST" ]; then
+-      # Substitute __HOME__ + __BUN_PATH__ placeholders (public template);
+-      # no-op on plists that already have literal paths.
+-      sed -e "s|__HOME__|$HOME|g" -e "s|__BUN_PATH__|$BUN_PATH|g" "$PLIST_SRC" > "$PLIST_DST"
++    if $IS_MACOS; then
++      if [ ! -f "$PLIST_DST" ]; then
++        # Substitute __HOME__ + __BUN_PATH__ placeholders (public template);
++        # no-op on plists that already have literal paths.
++        sed -e "s|__HOME__|$HOME|g" -e "s|__BUN_PATH__|$BUN_PATH|g" "$PLIST_SRC" > "$PLIST_DST"
++      fi
++      launchctl load "$PLIST_DST" 2>/dev/null
++    else
++      start_direct
+     fi
+-    launchctl load "$PLIST_DST" 2>/dev/null
+     echo "PAI Pulse started"
+     ;;
+ 
+   stop)
+-    launchctl unload "$PLIST_DST" 2>/dev/null
+-    if [ -f "$PID_FILE" ]; then
+-      PID=$(cat "$PID_FILE")
+-      kill "$PID" 2>/dev/null
+-      echo "PAI Pulse stopped (PID $PID)"
+-    else
+-      echo "PAI Pulse stopped"
++    if $IS_MACOS; then
++      launchctl unload "$PLIST_DST" 2>/dev/null
+     fi
++    stop_direct
+     ;;
+ 
+   restart)
+@@ -89,16 +119,22 @@
+     # Cleanup any prior pulse before installing fresh — prevents the stale-PID
+     # / unbound-port half-dead state where a previous launchd-managed pulse is
+     # alive with open fds but never bound :31337.
+-    if [ -f "$PLIST_DST" ]; then
+-      launchctl unload "$PLIST_DST" 2>/dev/null || true
++    if $IS_MACOS; then
++      if [ -f "$PLIST_DST" ]; then
++        launchctl unload "$PLIST_DST" 2>/dev/null || true
++      fi
+     fi
+     pkill -9 -f "bun.*pulse.ts" 2>/dev/null || true
+     sleep 1
+ 
+-    # Substitute __HOME__ + __BUN_PATH__ placeholders (public template);
+-    # no-op on plists that already have literal paths.
+-    sed -e "s|__HOME__|$HOME|g" -e "s|__BUN_PATH__|$BUN_PATH|g" "$PLIST_SRC" > "$PLIST_DST"
+-    launchctl load "$PLIST_DST"
++    if $IS_MACOS; then
++      # Substitute __HOME__ + __BUN_PATH__ placeholders (public template);
++      # no-op on plists that already have literal paths.
++      sed -e "s|__HOME__|$HOME|g" -e "s|__BUN_PATH__|$BUN_PATH|g" "$PLIST_SRC" > "$PLIST_DST"
++      launchctl load "$PLIST_DST"
++    else
++      start_direct
++    fi
+ 
+     # Verify pulse actually binds :31337 within 10s. Fail loud if not — prior
+     # behavior was silent success even when the daemon never came up.
+@@ -112,14 +148,17 @@
+       fi
+     done
+ 
+-    echo "ERROR: PAI Pulse plist installed but port 31337 did not bind within 10s." >&2
++    echo "ERROR: PAI Pulse installed but port 31337 did not bind within 10s." >&2
+     echo "  Check: tail -50 $PULSE_DIR/logs/pulse-stderr.log" >&2
+     exit 1
+     ;;
+ 
+   uninstall)
+-    launchctl unload "$PLIST_DST" 2>/dev/null
+-    rm -f "$PLIST_DST"
++    if $IS_MACOS; then
++      launchctl unload "$PLIST_DST" 2>/dev/null
++      rm -f "$PLIST_DST"
++    fi
++    stop_direct
+     echo "PAI Pulse uninstalled"
+     ;;
+ 
