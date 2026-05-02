@@ -1,0 +1,202 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Fri, 2 May 2026 13:00:00 +0200
+Subject: [PATCH 4/4] NixOS installer fixes
+
+On NixOS, the Nix wrapper provides `pai` on PATH — the installer
+must not inject shell aliases, show macOS-specific prompts, or
+display incorrect launch instructions.
+
+Changes:
+- Guard shell alias injection with NIX_STORE env check
+- Show `pai` instead of `source ~/.zshrc && pai` on NixOS
+- Skip macOS menu bar app prompt on Linux
+- Use platform-appropriate Pulse wording on Linux
+- Skip launchd plist validation on Linux
+- Skip shell alias validation on NixOS
+- Wait 5 seconds before process.exit so user can read summary (non-NixOS only)
+
+---
+diff -ruN a/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/index.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/index.ts
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/index.ts	2026-05-02 10:30:51.931869589 +0200
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/index.ts	2026-05-02 10:34:56.669239677 +0200
+@@ -296,7 +296,11 @@
+     print(`  ${c.gray}and how you think. Two paths to do that:${c.reset}`);
+     print("");
+     print(`  ${c.lightBlue}${c.bold}Fast path — let the DA interview you:${c.reset}`);
+-    print(`  ${c.gray}1.${c.reset} Run ${c.bold}source ~/.zshrc && pai${c.reset}${c.gray} to launch PAI.${c.reset}`);
++    if (process.env.NIX_STORE) {
++      print(`  ${c.gray}1.${c.reset} Run ${c.bold}pai${c.reset}${c.gray} to launch PAI.${c.reset}`);
++    } else {
++      print(`  ${c.gray}1.${c.reset} Run ${c.bold}source ~/.zshrc && pai${c.reset}${c.gray} to launch PAI.${c.reset}`);
++    }
+     print(`  ${c.gray}2.${c.reset} Type ${c.bold}/interview${c.reset}${c.gray} — the DA walks through TELOS, identity, projects, preferences. Pause and resume anytime.${c.reset}`);
+     print(`     ${c.gray}(Already have goals/journals/notes in Obsidian, Notion, etc.? Run the ${c.bold}Migrate${c.reset}${c.gray} skill first so the interview fills gaps instead of asking you to re-type.)${c.reset}`);
+     print("");
+@@ -315,6 +319,9 @@
+     print(`  ${c.gray}•${c.reset} Anything you write under ${c.bold}PAI/USER/${c.reset}${c.gray} stays on your machine — it never ships in any PAI release.${c.reset}`);
+     print("");
+ 
++    // Give the user time to read the summary before the terminal closes.
++    // On NixOS the wrapper keeps the terminal open — no delay needed.
++    if (!process.env.NIX_STORE) await new Promise(resolve => setTimeout(resolve, 5000));
+     process.exit(0);
+   } catch (error: any) {
+     printError(`\nInstallation failed: ${error.message}`);
+diff -ruN a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts	2026-05-02 10:30:51.936079494 +0200
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts	2026-05-02 10:35:04.079946199 +0200
+@@ -1522,22 +1522,25 @@
+   // Set up shell alias (detect bash/zsh/fish)
+   await emit({ event: "progress", step: "configuration", percent: 80, detail: "Setting up shell alias..." });
+ 
+-  const userShell = process.env.SHELL || "/bin/zsh";
+-  const rcFile = userShell.includes("bash") ? ".bashrc" : userShell.includes("fish") ? ".config/fish/config.fish" : ".zshrc";
+-  const rcPath = join(homedir(), rcFile);
+-  const aliasLine = `alias pai='bun ${join(paiDir, "PAI", "Tools", "pai.ts")}'`;
+-  const marker = "# PAI alias";
+-
+-  if (existsSync(rcPath)) {
+-    let content = readFileSync(rcPath, "utf-8");
+-    // Remove any existing pai alias (old CORE or PAI paths, any marker variant)
+-    content = content.replace(/^#\s*(?:PAI|CORE)\s*alias.*\n.*alias pai=.*\n?/gm, "");
+-    content = content.replace(/^alias pai=.*\n?/gm, "");
+-    // Add fresh alias
+-    content = content.trimEnd() + `\n\n${marker}\n${aliasLine}\n`;
+-    writeFileSync(rcPath, content);
+-  } else {
+-    writeFileSync(rcPath, `${marker}\n${aliasLine}\n`);
++  // On NixOS, `pai` is on PATH via the Nix wrapper — skip alias injection.
++  if (!process.env.NIX_STORE) {
++    const userShell = process.env.SHELL || "/bin/zsh";
++    const rcFile = userShell.includes("bash") ? ".bashrc" : userShell.includes("fish") ? ".config/fish/config.fish" : ".zshrc";
++    const rcPath = join(homedir(), rcFile);
++    const aliasLine = `alias pai='bun ${join(paiDir, "PAI", "Tools", "pai.ts")}'`;
++    const marker = "# PAI alias";
++
++    if (existsSync(rcPath)) {
++      let content = readFileSync(rcPath, "utf-8");
++      // Remove any existing pai alias (old CORE or PAI paths, any marker variant)
++      content = content.replace(/^#\s*(?:PAI|CORE)\s*alias.*\n.*alias pai=.*\n?/gm, "");
++      content = content.replace(/^alias pai=.*\n?/gm, "");
++      // Add fresh alias
++      content = content.trimEnd() + `\n\n${marker}\n${aliasLine}\n`;
++      writeFileSync(rcPath, content);
++    } else {
++      writeFileSync(rcPath, `${marker}\n${aliasLine}\n`);
++    }
+   }
+ 
+   // Fix permissions
+@@ -1856,11 +1859,19 @@
+     content:
+       "Pulse is the unified PAI runtime: it serves the Life Dashboard at http://localhost:31337, " +
+       "handles voice notifications (TTS via ElevenLabs), and runs observability + scheduled jobs. " +
+-      "Installing it as a launchd agent makes it auto-start on login and stay running across reboots.",
++      (process.platform === "darwin"
++        ? "Installing it as a launchd agent makes it auto-start on login and stay running across reboots."
++        : "Starting it as a background process enables voice, dashboard, and scheduled jobs."),
+   });
+ 
+-  const installPulseChoice = await getChoice("install-pulse", "Install Pulse as a system launchd service?", [
+-    { label: "Yes — install Pulse (recommended)", value: "yes", description: "Auto-starts on login. Voice + Dashboard + Observability." },
++  const pulsePrompt = process.platform === "darwin"
++    ? "Install Pulse as a system launchd service?"
++    : "Start Pulse as a background process?";
++  const pulseYesDesc = process.platform === "darwin"
++    ? "Auto-starts on login. Voice + Dashboard + Observability."
++    : "Voice + Dashboard + Observability. Restart via manage.sh.";
++  const installPulseChoice = await getChoice("install-pulse", pulsePrompt, [
++    { label: "Yes \u2014 install Pulse (recommended)", value: "yes", description: pulseYesDesc },
+     { label: "Skip — don't install Pulse now", value: "skip", description: "Voice notifications will not work until you run: bash ~/.claude/PAI/PULSE/manage.sh install" },
+   ], daName);
+ 
+@@ -1871,8 +1882,8 @@
+     await emit({ event: "message", content: "Pulse skipped. Voice not enabled — install later via: bash ~/.claude/PAI/PULSE/manage.sh install" });
+   }
+ 
+-  // ── Optional menu bar app (Y/n) — separate launchd plist + .app bundle ──
+-  if (voiceServerReady) {
++  // ── Optional menu bar app (Y/n) — macOS only (launchd plist + .app bundle) ──
++  if (voiceServerReady && process.platform === "darwin") {
+     await emit({
+       event: "message",
+       content:
+diff -ruN a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts	2026-05-02 10:30:51.940883586 +0200
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts	2026-05-02 10:31:59.506243510 +0200
+@@ -234,34 +234,45 @@
+     critical: false,
+   });
+ 
+-  // 7b. Pulse launchd plist present (auto-start on login)
+-  const pulsePlist = join(homedir(), "Library", "LaunchAgents", "com.pai.pulse.plist");
+-  const pulsePlistInstalled = existsSync(pulsePlist);
+-  checks.push({
+-    name: "Pulse launchd agent",
+-    passed: pulsePlistInstalled,
+-    detail: pulsePlistInstalled
+-      ? "Installed at ~/Library/LaunchAgents/com.pai.pulse.plist"
+-      : "Not installed — Pulse will not auto-start on login",
+-    critical: false,
+-  });
+-
+-  // 8. Zsh alias configured
+-  const zshrcPath = join(homedir(), ".zshrc");
+-  let aliasConfigured = false;
+-  if (existsSync(zshrcPath)) {
+-    try {
+-      const zshContent = readFileSync(zshrcPath, "utf-8");
+-      aliasConfigured = zshContent.includes("# PAI alias") && zshContent.includes("alias pai=");
+-    } catch {}
++  // 7b. Pulse launchd plist present (auto-start on login) — macOS only
++  if (process.platform === "darwin") {
++    const pulsePlist = join(homedir(), "Library", "LaunchAgents", "com.pai.pulse.plist");
++    const pulsePlistInstalled = existsSync(pulsePlist);
++    checks.push({
++      name: "Pulse launchd agent",
++      passed: pulsePlistInstalled,
++      detail: pulsePlistInstalled
++        ? "Installed at ~/Library/LaunchAgents/com.pai.pulse.plist"
++        : "Not installed — Pulse will not auto-start on login",
++      critical: false,
++    });
+   }
+ 
+-  checks.push({
+-    name: "Shell alias (pai)",
+-    passed: aliasConfigured,
+-    detail: aliasConfigured ? "Configured in .zshrc" : "Not found — run: source ~/.zshrc",
+-    critical: true,
+-  });
++  // 8. Zsh alias configured — skip on NixOS where pai is on PATH via Nix wrapper
++  if (process.env.NIX_STORE) {
++    checks.push({
++      name: "Shell alias (pai)",
++      passed: true,
++      detail: "NixOS — pai is on PATH via Nix wrapper (no alias needed)",
++      critical: false,
++    });
++  } else {
++    const zshrcPath = join(homedir(), ".zshrc");
++    let aliasConfigured = false;
++    if (existsSync(zshrcPath)) {
++      try {
++        const zshContent = readFileSync(zshrcPath, "utf-8");
++        aliasConfigured = zshContent.includes("# PAI alias") && zshContent.includes("alias pai=");
++      } catch {}
++    }
++
++    checks.push({
++      name: "Shell alias (pai)",
++      passed: aliasConfigured,
++      detail: aliasConfigured ? "Configured in .zshrc" : "Not found — run: source ~/.zshrc",
++      critical: true,
++    });
++  }
+ 
+   // 9. SecurityPipeline smoke test — runs the actual hook with a benign Bash
+   // payload. Catches the v5.0 fail-closed regression where PATTERNS.yaml was
+--
+2.53.0
+

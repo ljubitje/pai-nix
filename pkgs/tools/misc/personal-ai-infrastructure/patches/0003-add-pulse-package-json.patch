@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Fri, 2 May 2026 13:00:00 +0200
+Subject: [PATCH 3/4] Add package.json to PULSE for dependency resolution
+
+Pulse daemon imports six external npm packages (smol-toml, grammy,
+@anthropic-ai/claude-agent-sdk, minisearch, jose, yaml) but ships
+without a package.json. On NixOS the wrapper runs `bun install` in
+the PULSE directory during installation; without a manifest bun
+cannot resolve the dependencies and Pulse crashes on start.
+
+---
+ Releases/v5.0.0/.claude/PAI/PULSE/package.json | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+ create mode 100644 Releases/v5.0.0/.claude/PAI/PULSE/package.json
+
+diff --git a/Releases/v5.0.0/.claude/PAI/PULSE/package.json b/Releases/v5.0.0/.claude/PAI/PULSE/package.json
+new file mode 100644
+index 0000000..0000001
+--- /dev/null
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/package.json
+@@ -0,0 +1,14 @@
++{
++  "name": "pai-pulse",
++  "version": "5.0.0",
++  "private": true,
++  "description": "PAI Pulse daemon dependencies",
++  "dependencies": {
++    "smol-toml": "*",
++    "grammy": "*",
++    "@anthropic-ai/claude-agent-sdk": "*",
++    "minisearch": "*",
++    "jose": "*",
++    "yaml": "*"
++  }
++}
+--
+2.53.0
+

@@ -24,6 +24,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   patches = [
     ./patches/0001-skip-bun-management-on-nixos.patch
     ./patches/0002-add-linux-support-to-pulse.patch
+    ./patches/0003-add-pulse-package-json.patch
+    ./patches/0004-nixos-installer-fixes.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];
@@ -80,6 +82,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       mkdir -p node_modules/electron/dist
       printf "electron" > node_modules/electron/path.txt
       ln -sf "@electron@/bin/electron" node_modules/electron/dist/electron
+      # Install Pulse daemon dependencies.
+      cd "$HOME/.claude/PAI/PULSE"
+      bun install 2>/dev/null || echo "Warning: Pulse dependency install failed (non-fatal)"
       # Run upstream install.sh.
       bash "$HOME/.claude/install.sh"
 
