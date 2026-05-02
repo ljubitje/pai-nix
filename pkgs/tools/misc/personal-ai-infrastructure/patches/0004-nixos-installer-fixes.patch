@@ -17,6 +17,10 @@ Changes:
 - Wait 5 seconds before process.exit so user can read summary (non-NixOS only)
 - Fix Electron GUI: extend auto-close from 3s to 30s so user can read summary
 - Fix Electron GUI: show `pai` instead of `source ~/.zshrc && pai`
+- Fix Electron GUI: window is created but hidden behind other windows or on
+  another virtual desktop, leading users to think the GUI never opened. Show
+  on did-finish-load, center on primary display, briefly raise to top, and
+  log lifecycle events so failures are visible instead of silent.
 
 ---
 diff -ruN a/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/index.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/index.ts
@@ -224,6 +228,56 @@ diff -ruN a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts b/Release
      </div>
    `;
    chat.appendChild(card);
+diff -ruN a/Releases/v5.0.0/.claude/PAI/PAI-Install/electron/main.js b/Releases/v5.0.0/.claude/PAI/PAI-Install/electron/main.js
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/electron/main.js	2026-05-02 11:11:20.000000000 +0200
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/electron/main.js	2026-05-02 13:30:00.000000000 +0200
+@@ -103,6 +103,7 @@
+     backgroundColor: "#0f0f14",
+     title: "PAI Installer",
+     autoHideMenuBar: true,
++    show: false,
+     webPreferences: {
+       autoplayPolicy: "no-user-gesture-required",
+       nodeIntegration: false,
+@@ -110,6 +111,38 @@
+     },
+   });
+ 
++  // Center on the primary display so multi-monitor users always find the
++  // window, even when Electron's default placement lands it off-screen.
++  mainWindow.center();
++
++  // Present the window only after content is ready: avoids a blank flash and
++  // — more importantly — lets us raise it above other windows the moment it
++  // becomes useful, so users on multi-window or multi-virtual-desktop setups
++  // can't miss it (the original symptom: "GUI didn't appear, no errors").
++  const presentWindow = () => {
++    if (!mainWindow || mainWindow.isDestroyed()) return;
++    mainWindow.show();
++    mainWindow.focus();
++    mainWindow.moveTop();
++    mainWindow.setAlwaysOnTop(true);
++    setTimeout(() => {
++      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setAlwaysOnTop(false);
++    }, 1200);
++    console.log(`PAI Installer GUI ready at http://127.0.0.1:${PORT}/`);
++  };
++
++  mainWindow.webContents.once("did-finish-load", presentWindow);
++
++  // Belt-and-suspenders: if did-finish-load never fires (asset blocked, slow
++  // network), still show the frame after 3 s so the user sees something.
++  setTimeout(() => {
++    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) presentWindow();
++  }, 3000);
++
++  mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
++    console.error(`PAI Installer failed to load ${url}: ${desc} (code ${code}). Open http://127.0.0.1:${PORT}/ in a browser, or re-run \`pai\` with --skip-install to bypass the wizard.`);
++  });
++
+   mainWindow.loadURL(`http://127.0.0.1:${PORT}/`);
+ 
+   mainWindow.on("closed", () => {
 --
 2.53.0
 
