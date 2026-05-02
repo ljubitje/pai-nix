@@ -15,6 +15,8 @@ Changes:
 - Skip launchd plist validation on Linux
 - Skip shell alias validation on NixOS
 - Wait 5 seconds before process.exit so user can read summary (non-NixOS only)
+- Fix Electron GUI: extend auto-close from 3s to 30s so user can read summary
+- Fix Electron GUI: show `pai` instead of `source ~/.zshrc && pai`
 
 ---
 diff -ruN a/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/index.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/index.ts
@@ -197,6 +199,31 @@ diff -ruN a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts b/Release
  
    // 9. SecurityPipeline smoke test — runs the actual hook with a benign Bash
    // payload. Catches the v5.0 fail-closed regression where PATTERNS.yaml was
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/public/app.js	2026-05-02 11:11:20.183128034 +0200
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/public/app.js	2026-05-02 11:11:31.991288136 +0200
+@@ -107,7 +107,8 @@
+       // which exits the bun child, which lets install.sh resume and exec the
+       // post-install `pai` handoff. 3s is the same beat as the success voice
+       // notification so the audio finishes before the window disappears.
+-      setTimeout(() => { window.close(); }, 3000);
++      // Give the user time to read the summary before closing.
++      setTimeout(() => { window.close(); }, 30000);
+       break;
+ 
+     case 'error':
+@@ -467,9 +468,9 @@
+     <div class="summary-row"><span class="s-label">Voice</span><span class="s-value">${summary.voiceEnabled ? summary.voiceMode : 'Disabled'}</span></div>
+     <div class="summary-row"><span class="s-label">Install Type</span><span class="s-value">${installTypeLabel}</span></div>
+     <div class="summary-action">
+-      <p>To activate PAI, open a terminal and run:</p>
+-      <code>source ~/.zshrc && pai</code>
+-      <p class="summary-hint">This reloads your shell config and launches PAI for the first time.</p>
++      <p>To launch PAI, open a terminal and run:</p>
++      <code>pai</code>
++      <p class="summary-hint">PAI will start with your configuration active.</p>
+     </div>
+   `;
+   chat.appendChild(card);
 --
 2.53.0
 
