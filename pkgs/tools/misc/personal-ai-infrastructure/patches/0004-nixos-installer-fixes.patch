@@ -206,8 +206,8 @@ diff -ruN a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts b/Release
        // post-install `pai` handoff. 3s is the same beat as the success voice
        // notification so the audio finishes before the window disappears.
 -      setTimeout(() => { window.close(); }, 3000);
-+      // Give the user time to read the summary before closing.
-+      setTimeout(() => { window.close(); }, 30000);
++      // Don't auto-close — let the user read the summary and close manually.
++      // The wrapper script continues when the user closes the window.
        break;
  
      case 'error':
