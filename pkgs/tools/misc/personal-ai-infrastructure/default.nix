@@ -112,36 +112,116 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       cp -r "$PAI_SHARE" "$HOME/.claude"
       chmod -R u+w "$HOME/.claude"
 
+      # ── Reliable install lifecycle ──────────────────────────────────
+      # Marker semantics: .pai-installing exists for the duration of the
+      # install AND is deliberately preserved on any non-clean exit
+      # (install.sh non-zero, signal, crash). It is the "something went
+      # wrong, investigate before retrying" signal — clearing it would
+      # mask real failures and let bad installs silently re-run on every
+      # launch. Only a confirmed-successful install (install.sh exit 0)
+      # clears the marker AND writes .pai-version. Recovery from a stuck
+      # marker is the explicit `pai --force-install` flag.
+      #
+      # The bug this design fixes: previously the wrapper ran with
+      # `set -euo pipefail` for the entire install body, so if ANY
+      # subprocess after install.sh exited non-zero (npm install, bun
+      # install, a sed on a hardened rc file), the script aborted before
+      # `rm -f $PAI_INSTALLING` ran on the success path. The trap printed
+      # "interrupted" but did nothing useful. Net effect: install.sh
+      # could complete cleanly yet still leave a stuck marker behind,
+      # forcing --force-install on the next launch. The fix is to drop
+      # `set -e` for the install body so the success-path cleanup is
+      # always reachable, and to gate that cleanup on install.sh's exit.
       touch "$PAI_INSTALLING"
-      trap 'echo ""; echo "⚠  Install interrupted. Run \"pai\" again to retry."' EXIT
+      trap 'echo ""; echo "⚠  Install interrupted. Run pai --force-install to retry."' EXIT
+
+      set +e
 
       # Install electron JS deps and use Nix-provided electron binary.
       cd "$HOME/.claude/PAI/PAI-Install/electron"
-      npm install --ignore-scripts 2>/dev/null
+      # Keep stderr visible — a silent npm install failure here means the
+      # GUI installer can't load and the user has no idea why.
+      npm install --ignore-scripts
       mkdir -p node_modules/electron/dist
       printf "electron" > node_modules/electron/path.txt
       ln -sf "@electron@/bin/electron" node_modules/electron/dist/electron
+
       # Install root PAI dependencies (yaml for PatternInspector hook, plus
       # shared deps used by skills and tools). Bun's directory-walking
       # resolution picks these up from any importer in the tree.
+      # Stderr is intentionally NOT suppressed: a transient registry
+      # timeout silently leaves node_modules empty, and downstream
+      # symptoms (hooks crashing on `import "yaml"`) are then orders of
+      # magnitude harder to diagnose than the original error message.
       cd "$HOME/.claude"
-      bun install 2>/dev/null || echo "Warning: root dependency install failed (non-fatal)"
-      # Install Pulse daemon dependencies.
-      cd "$HOME/.claude/PAI/PULSE"
-      bun install 2>/dev/null || echo "Warning: Pulse dependency install failed (non-fatal)"
-      # Run upstream install.sh.
-      bash "$HOME/.claude/install.sh"
+      if ! bun install; then
+        echo ""
+        echo "⚠  Root dependency install failed — see error above."
+        echo "   Some hooks/tools may not work until you run:"
+        echo "     cd ~/.claude && bun install"
+        echo ""
+      fi
 
-      # Remove any pai alias install.sh may have written.
+      # Install Pulse daemon dependencies. Pulse will not start without
+      # smol-toml + grammy + jose + minisearch + yaml — when any of
+      # those are missing, manage.sh launches bun, bun crashes on the
+      # import, port 31337 stays unbound, and the validator's "Pulse
+      # not reachable" check fires. Stderr stays visible AND we verify
+      # smol-toml landed (the canary; it's the first import in pulse.ts
+      # so its absence is what produces the user-visible error).
+      cd "$HOME/.claude/PAI/PULSE"
+      if ! bun install; then
+        echo ""
+        echo "⚠  Pulse dependency install failed — see error above."
+        echo "   Pulse will not start. To retry:"
+        echo "     cd ~/.claude/PAI/PULSE && bun install"
+        echo "     bash ~/.claude/PAI/PULSE/manage.sh restart"
+        echo ""
+      elif [ ! -d "$HOME/.claude/PAI/PULSE/node_modules/smol-toml" ]; then
+        echo ""
+        echo "⚠  Pulse dependency install completed but node_modules is incomplete"
+        echo "   (smol-toml missing — Pulse will crash on import)."
+        echo "   To retry:"
+        echo "     cd ~/.claude/PAI/PULSE && rm -rf node_modules && bun install"
+        echo "     bash ~/.claude/PAI/PULSE/manage.sh restart"
+        echo ""
+      fi
+
+      # Run upstream install.sh; capture its exit code so a failure here
+      # is reflected explicitly rather than aborting the wrapper.
+      bash "$HOME/.claude/install.sh"
+      local install_exit=$?
+
+      # Remove any pai alias install.sh may have written. `|| true`
+      # so a read-only rc on a hardened system can't sink the install.
       for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
         if [ -f "$rc" ]; then
-          sed -i '/# PAI alias/d;/alias pai=/d' "$rc"
+          sed -i '/# PAI alias/d;/alias pai=/d' "$rc" 2>/dev/null || true
         fi
       done
 
-      rm -f "$PAI_INSTALLING"
-      trap - EXIT
-      echo "@version@" > "$PAI_MARKER"
+      set -e
+
+      if [ "$install_exit" -eq 0 ]; then
+        # Confirmed success: write version marker, clear in-progress
+        # marker, disarm the EXIT trap (the install completed normally,
+        # not "interrupted"). Order matters: write .pai-version BEFORE
+        # removing .pai-installing so a SIGKILL between the two never
+        # leaves the wrapper in a "no marker, no version" state that
+        # would trigger a fresh reinstall on the next launch.
+        echo "@version@" > "$PAI_MARKER"
+        rm -f "$PAI_INSTALLING"
+        trap - EXIT
+      else
+        # Failure: leave .pai-installing in place so the next launch
+        # surfaces the prior failure. Disarm the EXIT trap so we emit
+        # our own (more specific) message instead of the generic one.
+        trap - EXIT
+        echo ""
+        echo "⚠  install.sh exited with code $install_exit"
+        echo "   .pai-installing left in place; run 'pai --force-install' to retry."
+        exit "$install_exit"
+      fi
     }
 
     # Handle flags.
