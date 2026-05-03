@@ -190,7 +190,10 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     '';
     homepage = "https://ourpai.ai/";
     changelog = "https://github.com/danielmiessler/Personal_AI_Infrastructure/blob/v${finalAttrs.version}/Releases/v${finalAttrs.version}/README.md";
-    license = licenses.mit;
+    # PAI itself (bundled tarball) is MIT, copyright Daniel Miessler.
+    # The pai-nix packaging contribution (this derivation, patches, ISAs) is
+    # AGPL-3.0-only. End users get the combined work.
+    license = with licenses; [ mit agpl3Only ];
     platforms = platforms.unix;
     mainProgram = "pai";
   };
