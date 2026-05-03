@@ -1,0 +1,214 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 14:00:00 +0200
+Subject: [PATCH 6/6] Fix Pulse case-sensitive path construction on Linux
+
+PAI v5.0.0 ships its Pulse subsystem with inconsistent directory casing.
+The on-disk directory is "PULSE" (all caps — verified by extracting the
+upstream tarball and listing Releases/v5.0.0/.claude/PAI/), but 15 path-
+construction sites across 11 live source files spell it as "Pulse"
+(mixed case).
+
+On macOS (case-insensitive HFS+/APFS by default) every "Pulse" path
+resolves to the same directory as "PULSE" — bug invisible upstream.
+On NixOS / Linux ext4 (case-sensitive) every join(...,"Pulse",...)
+produces a path that does not exist; reads fail with ENOENT and writes
+either get silently dropped or land in a parallel ghost directory at
+~/.claude/PAI/Pulse/ depending on parent-dir creation logic.
+
+User-visible symptoms on NixOS:
+
+  1. Observability dashboard returns 404 for every page (/, /agents,
+     /work, /telos, /health, /algorithm, /security). The static Next.js
+     export at PAI/PULSE/Observability/out/ is correct and complete,
+     but observability.ts looks for it under PAI/Pulse/Observability/out/.
+
+  2. All four Pulse cron jobs (assistant-tasks, cost-aggregation,
+     healthcheck, airgradient-poll) report "result":"error" in
+     /healthz. run-job.ts spawns each job with cwd set to
+     PAI/Pulse/ — non-existent on Linux — and dies before the job
+     script runs.
+
+  3. iMessage / user-index / notification-governor / DA scheduler /
+     github-work / cost-aggregator state never persists across
+     restarts. Each module writes to its own ghost path under
+     PAI/Pulse/state/* which on a case-sensitive FS is a directory
+     that nothing else reads from.
+
+Fix scope: replace every '"Pulse"' string literal with '"PULSE"' in
+path-construction contexts. The change is platform-agnostic — "PULSE"
+matches the canonical on-disk name and works on both case-sensitive
+and case-insensitive filesystems. macOS users see no behavior change
+(both forms resolved to the same directory there before).
+
+Files touched (paths relative to upstream source root, line in
+upstream PAI v5.0.0, occurrences per file):
+
+  Releases/v5.0.0/.claude/PAI/PULSE/lib.ts                              :249  (1)
+  Releases/v5.0.0/.claude/PAI/PULSE/Observability/observability.ts      :69, 152, 1650  (3)
+  Releases/v5.0.0/.claude/PAI/PULSE/modules/imessage.ts                 :63, 64  (2)
+  Releases/v5.0.0/.claude/PAI/PULSE/modules/user-index.ts               :28  (1)
+  Releases/v5.0.0/.claude/PAI/PULSE/Performance/cost-aggregator.ts      :20  (1)
+  Releases/v5.0.0/.claude/PAI/PULSE/checks/poller-meta-monitor.ts       :23, 24  (2)
+  Releases/v5.0.0/.claude/PAI/PULSE/checks/github-work.ts               :17  (1)
+  Releases/v5.0.0/.claude/PAI/PULSE/checks/notification-governor.ts     :37  (1)
+  Releases/v5.0.0/.claude/PAI/PULSE/run-job.ts                          :34  (1)
+  Releases/v5.0.0/.claude/PAI/PULSE/setup.ts                            :18  (1)
+  Releases/v5.0.0/.claude/PAI/TOOLS/DASchedule.ts                       :18  (1)
+
+Total: 11 files, 13 hunks, 15 line changes.
+
+Skipped (zero inbound imports — orphaned legacy code; patching
+expands blast radius without value):
+
+  Releases/v5.0.0/.claude/PAI/PULSE/pulse-old.ts
+  Releases/v5.0.0/.claude/PAI/PULSE/pulse-unified.ts
+
+Hunks generated via diff -u against the extracted upstream tarball
+(/nix/store/zm296ivyw3qg1a2fm4aa7ns10f3ldy4c-v5.0.0.tar.gz). No
+hand-counted @@ headers — lesson from patch 0005 Changelog
+2026-05-02T17:35:00Z (off-by-one on hand-counted hunks).
+---
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/modules/user-index.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/modules/user-index.ts
+@@ -25,7 +25,7 @@
+ const HOME = process.env.HOME ?? ""
+ const PAI_DIR = process.env.PAI_DIR || join(HOME, ".claude", "PAI")
+ const USER_DIR = join(PAI_DIR, "USER")
+-const STATE_DIR = join(PAI_DIR, "Pulse", "state")
++const STATE_DIR = join(PAI_DIR, "PULSE", "state")
+ const INDEX_PATH = join(STATE_DIR, "user-index.json")
+ const MODULE_NAME = "user-index"
+ 
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/modules/imessage.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/modules/imessage.ts
+@@ -60,8 +60,8 @@
+ 
+ const HOME = process.env.HOME ?? ""
+ const CWD = join(HOME, ".claude")
+-const STATE_DIR = join(HOME, ".claude", "PAI", "Pulse", "state", "imessage")
+-const LOGS_DIR = join(HOME, ".claude", "PAI", "Pulse", "logs", "imessage")
++const STATE_DIR = join(HOME, ".claude", "PAI", "PULSE", "state", "imessage")
++const LOGS_DIR = join(HOME, ".claude", "PAI", "PULSE", "logs", "imessage")
+ 
+ let pollTimer: ReturnType<typeof setInterval> | null = null
+ let running = false
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/Performance/cost-aggregator.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/Performance/cost-aggregator.ts
+@@ -17,7 +17,7 @@
+ const PAI_DIR = join(HOME, ".claude", "PAI")
+ const PROJECTS_DIR = join(HOME, ".claude", "projects")
+ const OUTPUT_FILE = join(PAI_DIR, "MEMORY", "OBSERVABILITY", "session-costs.jsonl")
+-const STATE_FILE = join(PAI_DIR, "Pulse", "Performance", "aggregator-state.json")
++const STATE_FILE = join(PAI_DIR, "PULSE", "Performance", "aggregator-state.json")
+ 
+ // Model pricing per million tokens (as of 2026-04)
+ const MODEL_PRICING: Record<string, { input: number; output: number; cacheWrite: number; cacheRead: number }> = {
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/checks/poller-meta-monitor.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/checks/poller-meta-monitor.ts
+@@ -20,8 +20,8 @@
+ 
+ const HOME = process.env.HOME || "";
+ const PAI_DIR = process.env.PAI_DIR || join(HOME, ".claude", "PAI");
+-const PULSE_STATE = join(PAI_DIR, "Pulse", "state", "state.json");
+-const PULSE_TOML = join(PAI_DIR, "Pulse", "PULSE.toml");
++const PULSE_STATE = join(PAI_DIR, "PULSE", "state", "state.json");
++const PULSE_TOML = join(PAI_DIR, "PULSE", "PULSE.toml");
+ 
+ // Jobs we specifically monitor — the Current→Ideal pipeline ones.
+ const WATCHED_JOBS = [
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/checks/github-work.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/checks/github-work.ts
+@@ -14,7 +14,7 @@
+ import { SignJWT, importPKCS8 } from "jose"
+ 
+ const HOME = process.env.HOME ?? ""
+-const PULSE_DIR = join(HOME, ".claude", "PAI", "Pulse")
++const PULSE_DIR = join(HOME, ".claude", "PAI", "PULSE")
+ const STATE_FILE = join(PULSE_DIR, "state", "work-token.json")
+ 
+ // ── Worker Config (from PULSE.toml [worker] section) ──
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/checks/notification-governor.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/checks/notification-governor.ts
+@@ -34,7 +34,7 @@
+ 
+ const HOME = process.env.HOME || "";
+ const PAI_DIR = process.env.PAI_DIR || join(HOME, ".claude", "PAI");
+-const STATE_FILE = join(PAI_DIR, "Pulse", "state", "notification-governor.json");
++const STATE_FILE = join(PAI_DIR, "PULSE", "state", "notification-governor.json");
+ const LOG_FILE = join(PAI_DIR, "MEMORY", "OBSERVABILITY", "notification-governor.jsonl");
+ const NOTIFY_URL = "http://localhost:31337/notify";
+ const VOICE_ID = "fTtv3eikoepIosk8dTZ5";
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/lib.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/lib.ts
+@@ -246,7 +246,7 @@
+   const proc = Bun.spawn(["bash", "-c", command], {
+     stdout: "pipe",
+     stderr: "pipe",
+-    cwd: join(process.env.HOME ?? "~", ".claude", "PAI", "Pulse"),
++    cwd: join(process.env.HOME ?? "~", ".claude", "PAI", "PULSE"),
+     env: { ...process.env },
+   })
+ 
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/setup.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/setup.ts
+@@ -15,7 +15,7 @@
+ 
+ const HOME = process.env.HOME ?? "~"
+ const PAI_DIR = join(HOME, ".claude", "PAI")
+-const PULSE_DIR = join(PAI_DIR, "Pulse")
++const PULSE_DIR = join(PAI_DIR, "PULSE")
+ 
+ // ── Helpers ──
+ 
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/run-job.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/run-job.ts
+@@ -31,7 +31,7 @@
+   process.exit(1)
+ }
+ 
+-const PULSE_DIR = join(process.env.HOME ?? "~", ".claude", "PAI", "Pulse")
++const PULSE_DIR = join(process.env.HOME ?? "~", ".claude", "PAI", "PULSE")
+ const config = await loadConfig(PULSE_DIR)
+ const job = config.jobs.find((j) => j.name === jobName)
+ if (!job) {
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/Observability/observability.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/Observability/observability.ts
+@@ -66,7 +66,7 @@
+ const SETTINGS_PATH = join(HOME, ".claude", "settings.json")
+ const LADDER_DIR = join(HOME, "Projects", "Ladder")
+ 
+-const DEFAULT_DASHBOARD_DIR = join(PAI_DIR, "Pulse", "Observability", "out")
++const DEFAULT_DASHBOARD_DIR = join(PAI_DIR, "PULSE", "Observability", "out")
+ 
+ // ── In-Memory Store (hook-pushed state/events) ──
+ 
+@@ -149,7 +149,7 @@
+   const dir = config.dashboard_dir ?? DEFAULT_DASHBOARD_DIR
+   // Resolve relative paths against Pulse directory
+   if (!dir.startsWith("/")) {
+-    return join(HOME, ".claude", "PAI", "Pulse", dir)
++    return join(HOME, ".claude", "PAI", "PULSE", dir)
+   }
+   return dir
+ }
+@@ -1647,7 +1647,7 @@
+ function handleUserIndexApi(filter: string | null): Response {
+   try {
+     const PAI_DIR = process.env.PAI_DIR || join(process.env.HOME || "", ".claude", "PAI")
+-    const indexPath = join(PAI_DIR, "Pulse", "state", "user-index.json")
++    const indexPath = join(PAI_DIR, "PULSE", "state", "user-index.json")
+     const raw = Bun.file(indexPath)
+     if (!raw.size) {
+       return Response.json(
+--- a/Releases/v5.0.0/.claude/PAI/TOOLS/DASchedule.ts
++++ b/Releases/v5.0.0/.claude/PAI/TOOLS/DASchedule.ts
+@@ -15,7 +15,7 @@
+ 
+ const HOME = process.env.HOME ?? "~"
+ const PAI_DIR = join(HOME, ".claude", "PAI")
+-const TASKS_DIR = join(PAI_DIR, "Pulse", "state", "da")
++const TASKS_DIR = join(PAI_DIR, "PULSE", "state", "da")
+ const TASKS_PATH = join(TASKS_DIR, "scheduled-tasks.jsonl")
+ 
+ // ── Types ──
