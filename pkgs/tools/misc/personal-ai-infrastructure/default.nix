@@ -33,6 +33,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0009-fix-remaining-mixed-case-paths.patch
     ./patches/0010-fix-installer-home-literal-expansion.patch
     ./patches/0011-fix-system-prompt-placeholder-substitution.patch
+    ./patches/0012-fix-hook-registration.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];

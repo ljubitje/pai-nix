@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 15:50:00 +0200
+Subject: [PATCH 12/12] Register ISASync / CheckpointPerISC / ToolFailureTracker hooks
+
+Upstream issue: danielmiessler/Personal_AI_Infrastructure#1134
+
+Three hook files ship with v5.0.0 but are not registered in
+settings.json, so they never fire:
+
+  hooks/ISASync.hook.ts
+    PostToolUse(Write/Edit on ISA.md) — sync ISA frontmatter phase
+    to MEMORY/STATE/work.json + kitty tab title.
+
+  hooks/CheckpointPerISC.hook.ts
+    PostToolUse(Write/Edit on ISA.md) — auto-commit checkpoint repo
+    on every [ ]→[x] ISC transition.
+
+  hooks/ToolFailureTracker.hook.ts
+    PostToolUseFailure — append structured failure events to
+    MEMORY/OBSERVABILITY/tool-failures.jsonl.
+
+All three are referenced as live subsystems in:
+  PAI/ALGORITHM/v6.3.0.md (phase tracking, checkpoints)
+  PAI/DOCUMENTATION/ARCHITECTURE_SUMMARY.md Pipeline Topology
+
+But they are silent — phase changes don't reach work.json, no per-ISC
+checkpoint commits, no tool-failure observability.
+
+Fix: extend settings.json's hooks block:
+
+  - Add 1 entry to PostToolUse with matcher "Edit|Write" containing
+    both ISASync.hook.ts and CheckpointPerISC.hook.ts. async: true
+    so they don't block the Edit/Write call.
+  - Add new PostToolUseFailure top-level event with one entry
+    pointing to ToolFailureTracker.hook.ts. async: true, timeout 5.
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/settings.json                              :235
+
+Total: 1 file, 1 hunk, +29 lines added (2 new array entries +
+1 new top-level event key).
+
+Co-existence: no prior patch (0001-0011) modifies settings.json.
+JSON validity verified post-patch via jq:
+  .hooks.PostToolUse | length == 8 (was 7; added 1)
+  .hooks.PostToolUseFailure | length == 1 (was missing; added)
+  .hooks.PostToolUse[7].matcher == "Edit|Write"
+  .hooks.PostToolUse[7].hooks[0,1].command point to ISASync,
+    CheckpointPerISC respectively.
+  .hooks.PostToolUseFailure[0].hooks[0].command points to
+    ToolFailureTracker.
+
+Hunks generated via diff -u against the upstream tarball
+(/nix/store/zm296ivyw3qg1a2fm4aa7ns10f3ldy4c-v5.0.0.tar.gz). No
+hand-counted @@ headers.
+---
+--- a/Releases/v5.0.0/.claude/settings.json
++++ b/Releases/v5.0.0/.claude/settings.json
+@@ -231,6 +231,35 @@
+             "async": true
+           }
+         ]
++      },
++      {
++        "matcher": "Edit|Write",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "$HOME/.claude/hooks/ISASync.hook.ts",
++            "timeout": 5,
++            "async": true
++          },
++          {
++            "type": "command",
++            "command": "$HOME/.claude/hooks/CheckpointPerISC.hook.ts",
++            "timeout": 10,
++            "async": true
++          }
++        ]
++      }
++    ],
++    "PostToolUseFailure": [
++      {
++        "hooks": [
++          {
++            "type": "command",
++            "command": "$HOME/.claude/hooks/ToolFailureTracker.hook.ts",
++            "timeout": 5,
++            "async": true
++          }
++        ]
+       }
+     ],
+     "PreCompact": [
