@@ -188,6 +188,22 @@ stdenvNoCC.mkDerivation (finalAttrs: {
         echo ""
       fi
 
+      # Drop to a CWD the wizard won't yank out from under us before
+      # invoking install.sh. The wizard's `moveExistingClaudeToBackup`
+      # (PAI-Install/engine/actions.ts) does `mv ~/.claude →
+      # ~/.claude-backup-{ts}` partway through the install. The wrapper
+      # has been sitting in `~/.claude/PAI/PULSE` since the previous
+      # `bun install` step, so after the mv our CWD is a path that no
+      # longer exists. Symptoms: `shell-init: error retrieving current
+      # directory: getcwd: cannot access parent directories` warnings
+      # printed twice from bash subshells, and — fatally — claude-code's
+      # Node entrypoint calls `process.cwd()` early in startup and dies
+      # with `Error: ENOENT: process.cwd failed ... uv_cwd` on the very
+      # `exec claude` at the end of pai_install. $HOME is the safest
+      # destination: it always exists, never moves, and is where any
+      # interactive `pai` would naturally start anyway.
+      cd "$HOME"
+
       # Run upstream install.sh; capture its exit code so a failure here
       # is reflected explicitly rather than aborting the wrapper.
       bash "$HOME/.claude/install.sh"
