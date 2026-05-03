@@ -31,6 +31,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0007-fix-prompt-classifier-slash-prefix.patch
     ./patches/0008-fix-installer-paidir-misnaming.patch
     ./patches/0009-fix-remaining-mixed-case-paths.patch
+    ./patches/0010-fix-installer-home-literal-expansion.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];

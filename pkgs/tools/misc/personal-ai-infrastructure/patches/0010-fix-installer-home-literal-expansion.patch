@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 15:20:00 +0200
+Subject: [PATCH 10/10] Fix installer writing literal ${HOME}/$HOME into settings.json env
+
+Upstream issue: danielmiessler/Personal_AI_Infrastructure#1124
+
+The v5.0.0 installer writes shell-style variable refs (${HOME}, $HOME)
+literally into settings.json env values. Subprocesses (e.g.
+statusline-command.sh) expand $PAI_DIR/... once, leaving the literal
+${HOME} in the final path; mkdir then creates a real ${HOME}/
+directory (six characters: $ { H O M E }) in cwd.
+
+Symptom (from #1124 reporter):
+
+  ~/.claude/${HOME}/.claude/PAI/.quote-cache/
+  ~/.claude/${HOME}/.claude/PAI/MEMORY/STATE/{model,location,weather}-cache.*
+
+Two write paths produce this:
+
+  1. config-gen.ts:27 — `${config.paiDir}/PAI` template literal preserves
+     any literal "${HOME}/.claude" carried over from a prior settings.json.
+  2. actions.ts:1043 — projectsDir ingestion only expands ^~ via
+     `replace(/^~/, homedir())`. User input "${HOME}/Projects" passes
+     through unmodified.
+
+The upstream issue claims an expandPath() helper "already ships";
+verified by grep that it does NOT exist in v5.0.0. This patch adds it.
+
+Fix:
+
+  - Add `expandPath(p: string): string` helper in config-gen.ts,
+    handling ^~, ${HOME}, and $HOME (with right-boundary lookahead
+    to avoid matching $HOMEPAGE etc.). Exported.
+  - Wrap all three settings.json env values in
+    `generateSettingsJson()` with expandPath(): PAI_DIR,
+    PROJECTS_DIR, PAI_CONFIG_DIR.
+  - actions.ts imports expandPath alongside generateSettingsJson;
+    line 1043 swaps `replace(/^~/, homedir())` for
+    `expandPath(projDir.trim())`.
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/PAI/PAI-Install/engine/config-gen.ts        :9, 12-30, 27-29
+  Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts           :14, 1043
+
+Total: 2 files, 4 hunks (config-gen.ts ×2 — import+helper, env values;
+actions.ts ×2 — import, ingestion).
+
+Co-existence: patches 0008 and 0009 modify actions.ts at lines 1244,
+1396, 1530 — non-overlapping with this patch's targets at lines 14
+and 1043. Patches 0001-0009 do NOT touch config-gen.ts. Hunks
+generated via `diff -u` against the post-0009 result/ tree.
+---
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/config-gen.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/config-gen.ts
+@@ -6,10 +6,29 @@
+  * Hooks, permissions, and other config come from the release template.
+  */
+ 
++import { homedir } from "os";
+ import type { PAIConfig } from "./types";
+ import { DEFAULT_VOICES, PAI_VERSION, ALGORITHM_VERSION } from "./types";
+ 
+ /**
++ * Expand path tokens (^~, ${HOME}, $HOME) to the real home directory.
++ * Settings.json env values must contain only resolved paths — subprocesses
++ * (e.g. statusline-command.sh) expand $PAI_DIR/... once and any literal
++ * ${HOME} that survives that expansion gets `mkdir`'d as a real directory
++ * named "${HOME}" in cwd. Defensive against prior-settings.json carryover
++ * where the user (or an older installer) wrote `${HOME}/.claude` literally.
++ */
++export function expandPath(p: string): string {
++  if (!p) return p;
++  let out = p;
++  if (out === "~") out = homedir();
++  else if (out.startsWith("~/")) out = homedir() + out.slice(1);
++  out = out.replace(/\$\{HOME\}/g, homedir());
++  out = out.replace(/\$HOME(?=$|[/:])/g, homedir());
++  return out;
++}
++
++/**
+  * Generate a minimal fallback settings.json from installer-collected data.
+  * This is merged into (not replacing) the release template.
+  */
+@@ -24,9 +43,9 @@
+       // suffix; if we write just `~/.claude` here the statusline can't find
+       // ALGORITHM/LATEST and falls back to "—". The variable name `config.paiDir`
+       // is misleading — it's actually the INSTALL ROOT.
+-      PAI_DIR: `${config.paiDir}/PAI`,
+-      ...(config.projectsDir ? { PROJECTS_DIR: config.projectsDir } : {}),
+-      PAI_CONFIG_DIR: config.configDir,
++      PAI_DIR: expandPath(`${config.paiDir}/PAI`),
++      ...(config.projectsDir ? { PROJECTS_DIR: expandPath(config.projectsDir) } : {}),
++      PAI_CONFIG_DIR: expandPath(config.configDir),
+     },
+ 
+     contextFiles: [
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
+@@ -11,7 +11,7 @@
+ import type { InstallState, EngineEventHandler, DetectionResult, ExistingUserContentDetection, StepId } from "./types";
+ import { PAI_VERSION, ALGORITHM_VERSION, DEFAULT_VOICES } from "./types";
+ import { detectSystem, detectExistingUserContent, scanApiKeys, validateElevenLabsKey } from "./detect";
+-import { generateSettingsJson } from "./config-gen";
++import { generateSettingsJson, expandPath } from "./config-gen";
+ 
+ type ChoiceOption = {
+   label: string;
+@@ -1040,7 +1040,7 @@
+     state.collected.aiName
+   );
+   if (projDir.trim()) {
+-    state.collected.projectsDir = projDir.trim().replace(/^~/, homedir());
++    state.collected.projectsDir = expandPath(projDir.trim());
+   }
+ 
+   await emit({
