@@ -52,7 +52,7 @@ nix run git+https://codeberg.org/ljubitje/pai-nix -- --force-install
 
 ### Patches
 
-Each patch is a numbered, additive `.patch` file with a multi-paragraph header explaining the bug, RCA, fix scope, and co-existence with prior patches. Hunks are always generated via `diff -u` against the extracted upstream tarball or the post-prior-patches state — never hand-counted (lesson learned the hard way at patch 0005).
+Each patch is a numbered, additive `.patch` file with a multi-paragraph header explaining the bug, RCA, fix scope, verification evidence, and co-existence with prior patches. Hunks are always generated via `diff -u` against the extracted upstream tarball or the post-prior-patches state — never hand-counted (lesson learned the hard way at patch 0005).
 
 | #     | Patch                                       | Upstream                                                                                                  |
 | ----- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
@@ -74,17 +74,15 @@ Each patch is a numbered, additive `.patch` file with a multi-paragraph header e
 | 0016  | `PAI_STATE.json` producer for statusline    | [#1132](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1132)                         |
 | 0017  | Migrate observability to `/interview` TELOS schema | [#1153](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1153)                  |
 
-Each patch ships a companion ISA in `MEMORY/WORK/<slug>/ISA.md` documenting the bug, fix scope, criteria, and live verification.
-
 ---
 
 ## Design principles
 
 - **Transparency over runtime patching.** Every modification to upstream is an auditable `.patch` file. No runtime `sed` hacks. Build-time `find -exec rm` mutations are documented inline in `default.nix`.
 - **Match upstream conventions.** Patches use git format-patch headers, `diff --git a/Releases/v5.0.0/.claude/...` paths, multi-paragraph explanatory comments, and file/line manifests.
-- **Co-existence verified.** Where multiple patches touch the same file (e.g. five patches touch `actions.ts`), each ISA documents the line ranges and confirms non-overlapping hunks.
+- **Co-existence verified.** Where multiple patches touch the same file (e.g. five patches touch `actions.ts`), each patch header documents the line ranges and confirms non-overlapping hunks.
 - **Don't touch the macOS path.** Every Linux-specific fix is gated or platform-agnostic. macOS users see the same patches as a no-op (case-insensitive filesystem makes mixed-case paths resolve identically to caps).
-- **Live verification where possible.** Patch ISAs include synthetic tests, build-output greps, and (for runtime-affecting patches) live API/process probes captured in the Verification section.
+- **Live verification where possible.** Patch headers include synthetic tests, build-output greps, and (for runtime-affecting patches) live API/process probes.
 
 ---
 
@@ -95,7 +93,7 @@ Each patch ships a companion ISA in `MEMORY/WORK/<slug>/ISA.md` documenting the 
 **Caveats:**
 
 - `pai --force-install` opens an Electron GUI installer (port 1337). The CLI installer path is gated behind it; some interactive prompts are not yet automatable.
-- The `/algorithm` dashboard route returns 404 — `algorithm.html` is genuinely absent from upstream's `next export` output (content gap, not a path bug). Documented in patch 0017's ISA Out-of-Scope.
+- The `/algorithm` dashboard route returns 404 — `algorithm.html` is genuinely absent from upstream's `next export` output (content gap, not a path bug). Documented in patch 0017's header.
 - Cron jobs require network at user-install time for `bun install` to fetch deps. If the install is run offline, runtime cron jobs may error until `bun install` is re-run with network.
 
 ---
@@ -110,9 +108,6 @@ pai-nix/
 │   └── patches/
 │       ├── 0001-…patch             # Numbered, additive
 │       └── …
-├── ISA.md                          # Project-level ISA (validator-fix concern)
-├── MEMORY/WORK/<slug>/ISA.md       # Per-patch ISAs
-├── Plans/v5.0-upgrade.md           # Upgrade plan + v5.0.1 follow-ups
 ├── README.md                       # this file
 └── LICENSE                         # AGPL-3.0
 ```
@@ -125,7 +120,7 @@ Patches welcome — please follow the existing pattern:
 
 1. **Open an upstream issue first** (or reference an existing one). Patches that exist only in pai-nix without an upstream issue make the diff harder to maintain.
 2. **Generate hunks via `diff -u`.** Hand-counted `@@` headers will silently break. Workdir under `/tmp/<slug>/{before,after}/`, then `diff -u`, then prepend a git format-patch header.
-3. **Ship an ISA.** `MEMORY/WORK/<slug>/ISA.md` documents the bug, vision, criteria, and verification. Tier E2 (16 ISCs) for surgical fixes; E3 (32 ISCs) for cross-cutting work.
+3. **Document the patch in its header** — bug, RCA, fix scope, files/lines touched, and verification evidence (synthetic test, grep against built output, or live probe where applicable).
 4. **Verify co-existence.** Read prior patches' headers and confirm your hunks don't conflict with their line ranges.
 5. **One patch per concern, one commit per patch.** Easier to review, easier to bisect, easier to upstream individually.
 
@@ -133,7 +128,7 @@ Patches welcome — please follow the existing pattern:
 
 ## License
 
-This repository — the Nix expressions, patches, ISAs, and documentation written here — is licensed under the **GNU Affero General Public License v3.0 only** (AGPL-3.0-only). See [`LICENSE`](LICENSE).
+This repository — the Nix expressions, patches, and documentation written here — is licensed under the **GNU Affero General Public License v3.0 only** (AGPL-3.0-only). See [`LICENSE`](LICENSE).
 
 The packaged software, **Personal AI Infrastructure (PAI)**, is fetched as an upstream tarball at build time and remains under its own license: **MIT**, copyright © 2025 Daniel Miessler. See the bundled `LICENSE` file in the upstream tarball.
 
