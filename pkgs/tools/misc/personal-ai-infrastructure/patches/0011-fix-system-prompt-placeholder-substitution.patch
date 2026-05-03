@@ -1,0 +1,90 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 15:35:00 +0200
+Subject: [PATCH 11/11] Substitute {{...}} placeholders in PAI_SYSTEM_PROMPT.md
+
+Upstream issue: danielmiessler/Personal_AI_Infrastructure#1135
+
+PAI/PAI_SYSTEM_PROMPT.md ships with 25 unresolved placeholders:
+  {{PRINCIPAL_NAME}} ×17
+  {{DA_NAME}}        ×7
+  {{DA_FULL_NAME}}   ×1
+
+The TS installer at PAI/PAI-Install/engine/actions.ts substitutes
+identity into CLAUDE.md, DA_IDENTITY.md, and PRINCIPAL_IDENTITY.md
+(handlers near line 1430). The constitutional system prompt
+PAI_SYSTEM_PROMPT.md is NOT touched. Result: every session boots
+with the system prompt addressing the model as `{{DA_FULL_NAME}}`
+instead of the chosen DA name, and "{{PRINCIPAL_NAME}}" instead of
+the user's name. The token literals reach the model verbatim.
+
+Token-format note: PAI_SYSTEM_PROMPT.md uses double-brace flat tokens
+({{DA_NAME}}, {{PRINCIPAL_NAME}}). CLAUDE.md uses single-brace dotted
+tokens ({DA_IDENTITY.NAME}, {PRINCIPAL.NAME}). Different syntax,
+different consumers — this patch handles only the double-brace form
+in the named file.
+
+Backtick preservation: line 37 contains a doctrine example showing
+the literal output-template format:
+
+  Final visible token is the mode's closing line (`🗣️ {{DA_NAME}}: …`
+  or the Algorithm `━━━ 📃 SUMMARY ━━━ 7/7` block).
+
+This {{DA_NAME}} is inside a single-backtick code span and must stay
+literal so future readers see it as a generic placeholder, not as
+their specific DA's name. The patch substitutes only outside
+single-backtick spans (split-by-`/(`[^`\n]*`)/g`/, even-index chunks).
+
+Live count on upstream: 25 placeholders, 1 preserved (line 37 inside
+backticks), 24 substituted.
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts          :1477+
+    Adds a 22-line PAI_SYSTEM_PROMPT.md handler block after the
+    PRINCIPAL_IDENTITY.md handler, before the .env API keys block.
+
+Total: 1 file, 1 hunk. Net +22 lines added.
+
+Co-existence: patches 0008/0009/0010 modify actions.ts at lines 14,
+1043, 1244, 1396, 1530 — all non-overlapping with this patch's
+target at line ~1477. Hunks generated via diff -u against the
+post-0010 result/ tree.
+
+Verified via synthetic substitution: aiName="Val",
+principalName="Klemen" produces "Val — Personal AI" 1×, 7× "Val"
+total (1 from DA_FULL_NAME + 6 from DA_NAME outside backticks),
+17× "Klemen", and the 1 backtick-protected {{DA_NAME}} remains
+literal.
+---
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
+@@ -1475,6 +1475,28 @@
+     } catch {}
+   }
+ 
++  // PAI_SYSTEM_PROMPT.md — uses double-brace tokens (different from CLAUDE.md's
++  // single-brace dotted tokens). Substitute {{DA_NAME}} / {{DA_FULL_NAME}} /
++  // {{PRINCIPAL_NAME}} OUTSIDE single-backtick spans. Backtick spans contain
++  // doctrine examples (e.g. `🗣️ {{DA_NAME}}: …` showing the output template
++  // format) that must stay literal so users reading the prompt see them as
++  // the generic placeholder, not their own DA's name.
++  const systemPromptPath = join(paiDir, "PAI", "PAI_SYSTEM_PROMPT.md");
++  if (existsSync(systemPromptPath)) {
++    try {
++      const daFullName = `${aiName} — Personal AI`;
++      const content = readFileSync(systemPromptPath, "utf-8");
++      const rendered = content.split(/(`[^`\n]*`)/g).map((seg, i) => {
++        if (i % 2 === 1) return seg;
++        return seg
++          .replace(/\{\{DA_FULL_NAME\}\}/g, daFullName)
++          .replace(/\{\{DA_NAME\}\}/g, aiName)
++          .replace(/\{\{PRINCIPAL_NAME\}\}/g, principalName);
++      }).join("");
++      writeFileSync(systemPromptPath, rendered);
++    } catch {}
++  }
++
+   // Create .env file for API keys
+   await emit({ event: "progress", step: "configuration", percent: 50, detail: "Setting up API keys..." });
+ 

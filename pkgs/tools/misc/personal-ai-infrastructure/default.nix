@@ -32,6 +32,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0008-fix-installer-paidir-misnaming.patch
     ./patches/0009-fix-remaining-mixed-case-paths.patch
     ./patches/0010-fix-installer-home-literal-expansion.patch
+    ./patches/0011-fix-system-prompt-placeholder-substitution.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];
