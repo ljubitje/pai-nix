@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 16:00:00 +0200
+Subject: [PATCH 13/13] Fix GenerateTelosSummary.ts parser bugs
+
+Upstream issue: danielmiessler/Personal_AI_Infrastructure#1140
+
+Three independent parser bugs in
+PAI/TOOLS/GenerateTelosSummary.ts cause the auto-generated
+PRINCIPAL_TELOS.md (loaded into the DA's context at every session
+start via CLAUDE.md @-import) to silently miss most of the user's
+TELOS data.
+
+Bug 1 — parseItems() only matches bullet form
+  parseItems matches /^-\s+\*?\*?(\w+)\*?\*?:\s*(.+)/  i.e. only
+  "- **M0**: text". But canonical PAI source files (after
+  /interview, /migrate, or hand-edits) use header form:
+    ### M0: Family Presence
+  parseItems returns 0 items, so all 5 callers (parseMissions,
+  parseGoals, parseNarratives, parseChallenges, parseModels)
+  yield empty arrays.
+  Fix: extend parseItems to also try header form
+  /^#{2,4}\s+([A-Z]+\d+):\s*(.+?)(?:\s*\(.*\))?\s*$/. Bullet wins
+  if present (preserves prior behaviour); header is the fallback.
+  Trailing "(parenthetical)" is stripped (e.g. "### M0: Health
+  (FY2026)" → text "Health").
+
+Bug 2 — hardcoded {{PRINCIPAL_FULL_NAME}} placeholder
+  Line 220 hardcodes "# Principal TELOS — {{PRINCIPAL_FULL_NAME}}"
+  with no substitution mechanism in this generator. The literal
+  {{...}} token reaches the file and the DA boots seeing it.
+  Fix: add getPrincipalName() that reads settings.json
+  principal.fullName || principal.name (matching the schema written
+  by the installer in config-gen.ts:56-59), falling back to "User"
+  if settings.json is missing/malformed. Use template literal at
+  the call site.
+
+Bug 3 — parseTraumas() requires ID-prefixed items
+  parseTraumas calls parseItems (which expects TR0/TR1/... IDs),
+  but the canonical/bootstrap TRAUMAS.md uses plain titled headers:
+    ### Religious Worldview Shift
+    ### Divorce
+  parseItems returns 0, the section in the generated summary is
+  empty.
+  Fix: try parseItems first; if 0 items, fall back to extracting
+  /^###\s+(.+)$/gm header titles and assigning synthetic TR0..TRn.
+  Empty TRAUMAS.md still returns [].
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/PAI/TOOLS/GenerateTelosSummary.ts          :42, 49, 188, 217
+
+Total: 1 file, 4 hunks.
+
+Co-existence: no prior patch (0001-0012) modifies this file.
+
+Hunks generated via diff -u against extracted upstream tarball.
+No hand-counted @@ headers.
+
+Impact: PRINCIPAL_TELOS.md is @-imported into the DA's system
+context every session. Before this fix, the DA boots blind to
+missions, goals, narratives, challenges, formative experiences,
+and the principal name. After, all four parsers handle both
+bullet and header forms; principal name reflects settings.json;
+TRAUMAS.md works with or without ID prefixes.
+---
+--- a/Releases/v5.0.0/.claude/PAI/TOOLS/GenerateTelosSummary.ts
++++ b/Releases/v5.0.0/.claude/PAI/TOOLS/GenerateTelosSummary.ts
+@@ -42,6 +42,22 @@
+ }
+ 
+ /**
++ * Resolve the principal's display name from settings.json, falling back
++ * to a generic label. Replaces the literal {{PRINCIPAL_FULL_NAME}} token
++ * that previously shipped in the generated summary header.
++ */
++function getPrincipalName(): string {
++  try {
++    const path = join(process.env.HOME || '', '.claude/settings.json');
++    if (!existsSync(path)) return 'User';
++    const settings = JSON.parse(readFileSync(path, 'utf-8'));
++    return settings.principal?.fullName || settings.principal?.name || 'User';
++  } catch {
++    return 'User';
++  }
++}
++
++/**
+  * Parse items in format "- **ID**: text" or "- ID: text"
+  */
+ function parseItems(content: string): ParsedItem[] {
+@@ -49,10 +65,18 @@
+   const lines = content.split('\n');
+ 
+   for (const line of lines) {
+-    // Match "- **M0**: text" or "- M0: text" or "- **G0**: text" patterns
+-    const match = line.match(/^-\s+\*?\*?(\w+)\*?\*?:\s*(.+)/);
+-    if (match) {
+-      items.push({ id: match[1], text: match[2].trim() });
++    // Bullet form: "- **M0**: text" or "- M0: text" or "- **G0**: text"
++    const bullet = line.match(/^-\s+\*?\*?(\w+)\*?\*?:\s*(.+)/);
++    if (bullet) {
++      items.push({ id: bullet[1], text: bullet[2].trim() });
++      continue;
++    }
++    // Header form (canonical PAI source files after /interview): "## M0: text",
++    // "### G0: text", "#### MO0: text". Strip a trailing "(parenthetical)" if
++    // present (common in MISSION.md headers like "### M0: Health (FY2026)").
++    const header = line.match(/^#{2,4}\s+([A-Z]+\d+):\s*(.+?)(?:\s*\(.*\))?\s*$/);
++    if (header) {
++      items.push({ id: header[1], text: header[2].trim() });
+     }
+   }
+   return items;
+@@ -188,8 +212,18 @@
+  */
+ function parseTraumas(): string[] {
+   const content = readTelosFile('TRAUMAS.md');
++  if (!content) return [];
++
++  // Try ID-prefixed format first (TR0/TR1/TR2 in bullet or header form).
+   const items = parseItems(content);
+-  return items.map(i => `- **${i.id}**: ${truncate(i.text, 90)}`);
++  if (items.length > 0) {
++    return items.map(i => `- **${i.id}**: ${truncate(i.text, 90)}`);
++  }
++
++  // Fallback: bootstrap/canonical TRAUMAS.md uses plain "### Title" headers
++  // without ID prefixes. Assign synthetic TR0..TRn so the section is non-empty.
++  const headers = [...content.matchAll(/^###\s+(.+?)\s*$/gm)];
++  return headers.map((m, i) => `- **TR${i}**: ${truncate(m[1].trim(), 90)}`);
+ }
+ 
+ /**
+@@ -217,7 +251,7 @@
+   const models = parseModels();
+ 
+   const lines: string[] = [
+-    '# Principal TELOS — {{PRINCIPAL_FULL_NAME}}',
++    `# Principal TELOS — ${getPrincipalName()}`,
+     '',
+     '> Auto-generated from TELOS source files. Do not edit manually.',
+     `> Generated: ${now} | Sources: MISSION, GOALS, PROBLEMS, STRATEGIES, NARRATIVES, CHALLENGES, WRONG, TRAUMAS, MODELS`,
