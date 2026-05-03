@@ -36,6 +36,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0012-fix-hook-registration.patch
     ./patches/0013-fix-generate-telos-summary-parser.patch
     ./patches/0014-fix-repeatdetection-state-timing.patch
+    ./patches/0015-add-root-package-json.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];
@@ -117,6 +118,11 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       mkdir -p node_modules/electron/dist
       printf "electron" > node_modules/electron/path.txt
       ln -sf "@electron@/bin/electron" node_modules/electron/dist/electron
+      # Install root PAI dependencies (yaml for PatternInspector hook, plus
+      # shared deps used by skills and tools). Bun's directory-walking
+      # resolution picks these up from any importer in the tree.
+      cd "$HOME/.claude"
+      bun install 2>/dev/null || echo "Warning: root dependency install failed (non-fatal)"
       # Install Pulse daemon dependencies.
       cd "$HOME/.claude/PAI/PULSE"
       bun install 2>/dev/null || echo "Warning: Pulse dependency install failed (non-fatal)"

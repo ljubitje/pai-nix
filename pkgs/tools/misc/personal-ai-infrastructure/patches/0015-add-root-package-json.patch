@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 16:35:00 +0200
+Subject: [PATCH 15/15] Add root package.json for PAI runtime dependencies
+
+Upstream issue: danielmiessler/Personal_AI_Infrastructure#1139
+
+A clean PAI v5.0 install ships without a top-level package.json or
+node_modules at ~/.claude/. Anything in the install with bare-module
+imports crashes at runtime — including security hooks that fire on
+every Read tool call (PatternInspector imports `yaml`) and the
+broader skill ecosystem (openai, handlebars, replicate, etc.).
+
+Patch 0003 already shipped a PULSE-specific package.json with the
+six Pulse-daemon dependencies (smol-toml, grammy,
+@anthropic-ai/claude-agent-sdk, minisearch, jose, yaml). That fixed
+Pulse but left the root tree without a manifest, so bare-module
+imports outside PULSE/ still resolved unpredictably (or crashed).
+
+Affected non-Pulse imports surveyed across hooks/, PAI/TOOLS/, and
+skills/:
+
+  yaml             — hooks/security/inspectors/PatternInspector.ts
+                     (PreToolUse:Read, fires on every Read)
+  openai           — PAI/TOOLS/Inference.ts, multiple skills
+  @google/genai    — skills/Research, others
+  handlebars       — skills/Prompting (template rendering)
+  replicate        — skills/Art, skills/Sales (image generation)
+  clsx             — skills/Webdesign UI helpers
+  tailwind-merge   — skills/Webdesign UI helpers
+
+This patch ships a root package.json declaring those deps. The
+companion `bun install` step in the Nix wrapper (default.nix) runs
+at user-install time (right after the existing PULSE/ install), so
+node_modules lands at ~/.claude/node_modules and bun's directory-
+walking resolution finds the deps from any importer in the tree.
+
+Per the wider design choice (option B in the pai-nix patch series),
+bun install runs at user-install time rather than at nix-build time
+because Nix's build sandbox blocks network access and a true
+fixed-output derivation would require maintaining a hashed bun.lock
+across every dep update — not justified for a release-tracking
+package. Same pattern as patch 0003 (Pulse package.json).
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/package.json                              NEW (16 lines)
+
+The companion default.nix wrapper change — a `bun install` invocation
+at the install root after `cp -r "$PAI_SHARE" "$HOME/.claude"` — is
+shipped together with this patch but lives in default.nix, not in
+the upstream tarball, so no patch entry for it.
+---
+ Releases/v5.0.0/.claude/package.json | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+ create mode 100644 Releases/v5.0.0/.claude/package.json
+
+diff --git a/Releases/v5.0.0/.claude/package.json b/Releases/v5.0.0/.claude/package.json
+new file mode 100644
+index 0000000..0000001
+--- /dev/null
++++ b/Releases/v5.0.0/.claude/package.json
+@@ -0,0 +1,16 @@
++{
++  "name": "pai-root",
++  "version": "5.0.0",
++  "private": true,
++  "description": "PAI root runtime dependencies (hooks, tools, shared skill deps)",
++  "dependencies": {
++    "yaml": "*",
++    "openai": "*",
++    "@google/genai": "*",
++    "handlebars": "*",
++    "replicate": "*",
++    "clsx": "*",
++    "tailwind-merge": "*"
++  }
++}
++
