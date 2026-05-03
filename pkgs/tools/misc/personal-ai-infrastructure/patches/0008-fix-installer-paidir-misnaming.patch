@@ -1,0 +1,138 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 14:50:00 +0200
+Subject: [PATCH 8/8] Fix installer paiDir misnaming + stray ~/.claude/MEMORY/
+
+Upstream issue: danielmiessler/Personal_AI_Infrastructure#1121
+
+The v5.0.0 installer carries v4-era naming where the variable `paiDir`
+means Claude home (~/.claude) rather than the PAI data directory
+(~/.claude/PAI). The mismatch is acknowledged in the upstream comment
+at engine/types.ts:63 (`paiDir: string; // resolved ~/.claude`) and
+at engine/config-gen.ts:22-26 ("the variable name `config.paiDir` is
+misleading"). The rest of v5.0.0 (hooks/lib/paths.ts) defines
+paiDir = ~/.claude/PAI.
+
+22 call sites correctly join "PAI" for PAI-data paths; 5 forgot it.
+Plus engine/detect.ts:340 ignores $PAI_DIR despite the adjacent line
+reading $PAI_CONFIG_DIR — same pattern, just not applied here.
+
+Manifestations on a fresh install (per #1121):
+
+  1. ~/.claude/MEMORY/{STATE,LEARNING,WORK,RELATIONSHIP,VOICE}/ empty
+     skeleton — no hook ever writes there. Real MEMORY is at
+     ~/.claude/PAI/MEMORY/.
+  2. settings.json counts.signals shipped as 0 because the count probe
+     reads ~/.claude/MEMORY/LEARNING (non-existent).
+  3. settings.json counts.files shipped as 0 because the count probe
+     reads the legacy v2.5–v3.0 path ~/.claude/skills/PAI/USER which
+     doesn't exist in v5.0.
+  4. UpdateCounts.ts files counter permanently 0 — here paiDir is
+     ~/.claude/PAI (inverse semantics) so join(paiDir, 'PAI/USER')
+     produces ~/.claude/PAI/PAI/USER (duplicate PAI/ segment).
+  5. detect.ts ignores $PAI_DIR — users running PAI from a non-default
+     location get the hardcoded ~/.claude.
+  6. validate.ts requiredDirs check against the wrong MEMORY paths.
+     Currently passes only because manifestation #1 creates the empty
+     skeleton at the wrong location. Once #1 is fixed, validate.ts
+     must follow.
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts            :1244, 1396
+  Releases/v5.0.0/.claude/PAI/PAI-Install/engine/detect.ts             :340
+  Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts           :157, 172
+  Releases/v5.0.0/.claude/hooks/handlers/UpdateCounts.ts               :174
+
+Total: 4 files, 6 hunks.
+
+Co-existence note: patch 0005 (validator-spurious-failures) also
+touches validate.ts and actions.ts but at different line ranges
+(~175 and ~254 in validate.ts; ~1526 in actions.ts). Non-overlapping;
+both apply cleanly when 0005 is applied first then 0008.
+
+Hunks generated via `diff -u` against the extracted upstream tarball
+(/nix/store/zm296ivyw3qg1a2fm4aa7ns10f3ldy4c-v5.0.0.tar.gz). No
+hand-counted @@ headers (lesson from patch 0005 Changelog
+2026-05-02T17:35:00Z).
+---
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
+@@ -1242,12 +1242,12 @@
+ 
+   // Create required directories regardless of clone result
+   const requiredDirs = [
+-    "MEMORY",
+-    "MEMORY/STATE",
+-    "MEMORY/LEARNING",
+-    "MEMORY/WORK",
+-    "MEMORY/RELATIONSHIP",
+-    "MEMORY/VOICE",
++    "PAI/MEMORY",
++    "PAI/MEMORY/STATE",
++    "PAI/MEMORY/LEARNING",
++    "PAI/MEMORY/WORK",
++    "PAI/MEMORY/RELATIONSHIP",
++    "PAI/MEMORY/VOICE",
+     "Plans",
+     "hooks",
+     "skills",
+@@ -1393,8 +1393,8 @@
+     const skillCount = countDirs(join(paiDir, "skills"), (name) =>
+       existsSync(join(paiDir, "skills", name, "SKILL.md")));
+     const hookCount = countFiles(join(paiDir, "hooks"), ".ts");
+-    const signalCount = countFiles(join(paiDir, "MEMORY", "LEARNING"), ".md");
+-    const fileCount = countFiles(join(paiDir, "skills", "PAI", "USER"));
++    const signalCount = countFiles(join(paiDir, "PAI", "MEMORY", "LEARNING"), ".md");
++    const fileCount = countFiles(join(paiDir, "PAI", "USER"));
+     // Count workflows by scanning skill Tools directories for .ts files
+     let workflowCount = 0;
+     const skillsDir = join(paiDir, "skills");
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/detect.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/detect.ts
+@@ -337,7 +337,9 @@
+  */
+ export function detectSystem(): DetectionResult {
+   const home = homedir();
+-  const paiDir = join(home, ".claude");
++  // Honor $PAI_DIR (matches the convention already used for $PAI_CONFIG_DIR
++  // on the next line, and read elsewhere by hooks/lib/paths.ts and Pulse).
++  const paiDir = process.env.PAI_DIR || join(home, ".claude");
+   const configDir = process.env.PAI_CONFIG_DIR || join(home, ".config", "PAI");
+ 
+   return {
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts
+@@ -156,9 +156,9 @@
+   // 3. Directory structure
+   const requiredDirs = [
+     { path: "skills", name: "Skills directory" },
+-    { path: "MEMORY", name: "Memory directory" },
+-    { path: "MEMORY/STATE", name: "State directory" },
+-    { path: "MEMORY/WORK", name: "Work directory" },
++    { path: "PAI/MEMORY", name: "Memory directory" },
++    { path: "PAI/MEMORY/STATE", name: "State directory" },
++    { path: "PAI/MEMORY/WORK", name: "Work directory" },
+     { path: "hooks", name: "Hooks directory" },
+     { path: "Plans", name: "Plans directory" },
+   ];
+@@ -169,7 +169,7 @@
+       name: dir.name,
+       passed: existsSync(fullPath),
+       detail: existsSync(fullPath) ? "Present" : "Missing",
+-      critical: dir.path === "skills" || dir.path === "MEMORY",
++      critical: dir.path === "skills" || dir.path === "PAI/MEMORY",
+     });
+   }
+ 
+--- a/Releases/v5.0.0/.claude/hooks/handlers/UpdateCounts.ts
++++ b/Releases/v5.0.0/.claude/hooks/handlers/UpdateCounts.ts
+@@ -171,7 +171,7 @@
+     workflows: countWorkflowFiles(join(getClaudeDir(), 'skills')),
+     hooks: countHooks(paiDir),
+     signals: countFilesRecursive(join(paiDir, 'MEMORY/LEARNING'), '.md'),
+-    files: countFilesRecursive(join(paiDir, 'PAI/USER')),
++    files: countFilesRecursive(join(paiDir, 'USER')),
+     work: countSubdirs(join(paiDir, 'MEMORY/WORK')),
+     sessions: countFilesRecursive(join(paiDir, 'MEMORY'), '.jsonl'),
+     research: countFilesRecursive(join(paiDir, 'MEMORY/RESEARCH'), '.md') +

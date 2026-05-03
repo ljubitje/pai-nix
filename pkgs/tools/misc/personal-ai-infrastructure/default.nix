@@ -29,6 +29,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0005-fix-validator-spurious-failures.patch
     ./patches/0006-fix-pulse-path-case.patch
     ./patches/0007-fix-prompt-classifier-slash-prefix.patch
+    ./patches/0008-fix-installer-paidir-misnaming.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];
