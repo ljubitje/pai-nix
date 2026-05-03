@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 14:35:00 +0200
+Subject: [PATCH 7/7] Fix prompt classifier failing on slash-prefixed prompts
+
+Upstream issue: danielmiessler/Personal_AI_Infrastructure#1158
+
+`hooks/PromptProcessing.hook.ts` runs the Sonnet mode/tier classifier on
+every UserPromptSubmit via the `claude --print` subprocess in
+`PAI/TOOLS/Inference.ts`. When the user prompt starts with "/" (any
+slash-command — /interview, /loop, /migrate, etc.), `claude --print`
+reads stdin starting with "/" as a CLI slash-command and returns
+`Unknown command: /<X>`. The classifier's JSON parse fails. The
+fail-safe path then writes `MODE: ALGORITHM | TIER: E3 | REASON:
+inference failed | SOURCE: fail-safe` into additionalContext.
+
+User-visible symptom: every "/"-prefixed prompt that reaches the
+classifier escalates to ALGORITHM E3 regardless of the actual
+workflow's complexity. Cosmetic noise, telemetry pollution, and
+occasional unwanted ceremony.
+
+Fix: wrap leading-"/" prompts as `User invoked: <prompt>` before
+sending to the classifier. The classifier still sees the actual prompt
+text after the prefix and produces the right MODE/TIER for the
+underlying intent. Verbatim from the upstream issue's proposed fix
+(also tested locally by the reporter).
+
+File touched (line in upstream PAI v5.0.0):
+
+  Releases/v5.0.0/.claude/hooks/PromptProcessing.hook.ts                :926-931
+
+Hunks generated via `diff -u` against the extracted upstream tarball
+(/nix/store/zm296ivyw3qg1a2fm4aa7ns10f3ldy4c-v5.0.0.tar.gz). No
+hand-counted @@ headers (lesson from patch 0005 Changelog
+2026-05-02T17:35:00Z).
+---
+--- a/Releases/v5.0.0/.claude/hooks/PromptProcessing.hook.ts
++++ b/Releases/v5.0.0/.claude/hooks/PromptProcessing.hook.ts
+@@ -924,11 +924,16 @@
+     console.error('[PromptProcessing] Running inference (tab title' + (isFirstPrompt ? ' + session name)...' : ')...'));
+ 
+     const cleanPrompt = prompt.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000);
++    // Wrap leading-`/` so `claude --print` doesn't read it as a CLI slash-command
++    // (which would return "Unknown command: /X" and fail JSON parse → E3 fail-safe).
++    const safePrompt = cleanPrompt.startsWith('/')
++      ? `User invoked: ${cleanPrompt}`
++      : cleanPrompt;
+     // Naming is permanent and first-prompt-only; exclude Assistant turns so Algorithm scaffolding
+     // (phase headers, agent names, SUMMARY lines) cannot contaminate the session name. Tab-title
+     // inference on later prompts keeps Assistant context for "continue with X" style follow-ups.
+     const context = getRecentContext(data.transcript_path, 6, !isFirstPrompt);
+-    const userPrompt = context ? `CONTEXT:\n${context}\n\nCURRENT MESSAGE:\n${cleanPrompt}` : cleanPrompt;
++    const userPrompt = context ? `CONTEXT:\n${context}\n\nCURRENT MESSAGE:\n${safePrompt}` : safePrompt;
+ 
+     const inferenceStart = Date.now();
+     try {

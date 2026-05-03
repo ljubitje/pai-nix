@@ -28,6 +28,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0004-nixos-installer-fixes.patch
     ./patches/0005-fix-validator-spurious-failures.patch
     ./patches/0006-fix-pulse-path-case.patch
+    ./patches/0007-fix-prompt-classifier-slash-prefix.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];
