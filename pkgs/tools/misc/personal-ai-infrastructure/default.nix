@@ -37,6 +37,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0013-fix-generate-telos-summary-parser.patch
     ./patches/0014-fix-repeatdetection-state-timing.patch
     ./patches/0015-add-root-package-json.patch
+    ./patches/0016-add-pai-state-producer.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];

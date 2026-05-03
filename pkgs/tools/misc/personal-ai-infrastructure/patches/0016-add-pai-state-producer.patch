@@ -1,0 +1,195 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 16:50:00 +0200
+Subject: [PATCH 16/16] Add PAI_STATE.json producer (upstream issue #1132)
+
+Upstream issue: danielmiessler/Personal_AI_Infrastructure#1132
+
+The statusline-command.sh STATE meter line reads PAI_STATE.json at
+~/.claude/PAI/USER/TELOS/PAI_STATE.json. The file is never created
+because:
+
+  - ComputeGap.ts (named as the producer in the comment at
+    statusline-command.sh:1149) only prints to stdout / appends to
+    gap-history.jsonl. Never writes PAI_STATE.json. Covers only
+    3/5 dimensions. Emits no `pct` value.
+  - No cron, no launchd, no SessionStart hook, no routine invokes
+    any producer.
+  - `grep -rn "PAI_STATE\.json"` returns zero non-statusline refs.
+
+Result: every user sees `STATE: HEALTH N/A | CREATIVE N/A |
+FREEDOM N/A | RELATIONS N/A | FIN N/A` in their statusline. Dead
+widget.
+
+Fix (separates producer from analytics, per the upstream issue's
+suggestion):
+
+  1. Ship USER/TELOS/PAI_STATE_INPUT.yaml — user-rated pct: 0-100 |
+     null per dimension. Bootstrap default is all-null so the
+     statusline renders N/A until the user populates it.
+  2. Ship TOOLS/WritePaiState.ts — deterministic YAML→JSON
+     converter, ~50 lines. Writes the schema statusline-command.sh
+     already expects (.dimensions.<dim>.pct). Validates: pct must
+     be a number 0-100 or null.
+  3. Wire WritePaiState.ts into a SessionStart hook chain via
+     settings.json. ~10ms overhead per session start.
+  4. Fix misleading comments in statusline-command.sh:1149,
+     :1183-1184 to point at the new producer.
+
+ComputeGap.ts is left alone as a report tool (its actual purpose).
+The statusline contract (lines 1188-1195, tier coloring 1165-1177)
+stays unchanged.
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/PAI/USER/TELOS/PAI_STATE_INPUT.yaml      NEW (12 lines)
+  Releases/v5.0.0/.claude/PAI/TOOLS/WritePaiState.ts               NEW (51 lines, executable)
+  Releases/v5.0.0/.claude/PAI/statusline-command.sh                :1149, 1183-1184 (comment fixes)
+  Releases/v5.0.0/.claude/settings.json                            :SessionStart chain (add hook)
+
+Total: 4 files (2 NEW + 2 modified), 5 hunks.
+
+The yaml dep needed by WritePaiState.ts is already declared in the
+root package.json (patch 0015) and available via bun's directory-
+walking module resolution.
+
+Co-existence: patches 0012 and 0014 modify settings.json; this
+patch's hunk targets a different region (SessionStart chain).
+Patches 0001-0015 do not touch statusline-command.sh.
+
+Hunks generated against post-0015 result/ tree (for modified files)
+and /dev/null (for new files). New-file mode headers inserted
+manually for nix's patch -p1 compatibility.
+---
+ Releases/v5.0.0/.claude/PAI/USER/TELOS/PAI_STATE_INPUT.yaml | 12 ++++++
+ Releases/v5.0.0/.claude/PAI/TOOLS/WritePaiState.ts          | 51 +++++++++++++++++++++++
+ Releases/v5.0.0/.claude/PAI/statusline-command.sh           |  6 +--
+ Releases/v5.0.0/.claude/settings.json                       |  6 +++
+ 4 files changed, 73 insertions(+), 2 deletions(-)
+ create mode 100644 Releases/v5.0.0/.claude/PAI/USER/TELOS/PAI_STATE_INPUT.yaml
+ create mode 100755 Releases/v5.0.0/.claude/PAI/TOOLS/WritePaiState.ts
+
+diff --git a/Releases/v5.0.0/.claude/PAI/USER/TELOS/PAI_STATE_INPUT.yaml b/Releases/v5.0.0/.claude/PAI/USER/TELOS/PAI_STATE_INPUT.yaml
+new file mode 100644
+index 0000000..0000001
+--- /dev/null
++++ b/Releases/v5.0.0/.claude/PAI/USER/TELOS/PAI_STATE_INPUT.yaml
+@@ -0,0 +1,14 @@
++# PAI_STATE_INPUT.yaml — Self-rated progress toward your ideal state.
++#
++# Each dimension's pct is your honest 0-100 rating of how close you are
++# to the IDEAL_STATE for that area. null = not rated yet (statusline
++# will render N/A).
++#
++# WritePaiState.ts reads this on SessionStart and writes
++# PAI_STATE.json in the schema statusline-command.sh expects.
++dimensions:
++  health: null
++  creative: null
++  freedom: null
++  relationships: null
++  money: null
+diff --git a/Releases/v5.0.0/.claude/PAI/TOOLS/WritePaiState.ts b/Releases/v5.0.0/.claude/PAI/TOOLS/WritePaiState.ts
+new file mode 100755
+index 0000000..0000001
+--- /dev/null
++++ b/Releases/v5.0.0/.claude/PAI/TOOLS/WritePaiState.ts
+@@ -0,0 +1,60 @@
++#!/usr/bin/env bun
++/**
++ * WritePaiState.ts — SessionStart producer for the statusline STATE meter.
++ *
++ * Reads:  ~/.claude/PAI/USER/TELOS/PAI_STATE_INPUT.yaml
++ *           dimensions: { health, creative, freedom, relationships, money }
++ *           values: 0-100 (percent toward ideal) or null (not rated).
++ * Writes: ~/.claude/PAI/USER/TELOS/PAI_STATE.json
++ *           in the schema statusline-command.sh:1188-1196 expects.
++ *
++ * Deterministic. ~10ms. Silent on missing/malformed input — the
++ * statusline already falls back to "N/A" when PAI_STATE.json is
++ * absent or contains nulls.
++ *
++ * Closes #1132. Separates producer (this file) from analytics
++ * (ComputeGap.ts). The statusline contract is unchanged.
++ */
++
++import { readFileSync, writeFileSync, existsSync } from "fs";
++import { join } from "path";
++import { parse as parseYaml } from "yaml";
++
++const PAI_DIR = process.env.PAI_DIR || join(process.env.HOME || "", ".claude/PAI");
++const INPUT_PATH = join(PAI_DIR, "USER/TELOS/PAI_STATE_INPUT.yaml");
++const OUTPUT_PATH = join(PAI_DIR, "USER/TELOS/PAI_STATE.json");
++
++const DIMENSIONS = ["health", "creative", "freedom", "relationships", "money"] as const;
++type Dimension = typeof DIMENSIONS[number];
++
++interface Input {
++  dimensions?: Partial<Record<Dimension, number | null>>;
++}
++
++function clampPct(value: unknown): number | null {
++  if (typeof value !== "number") return null;
++  if (!Number.isFinite(value)) return null;
++  if (value < 0 || value > 100) return null;
++  return value;
++}
++
++function main(): void {
++  if (!existsSync(INPUT_PATH)) return;
++
++  let parsed: Input;
++  try {
++    parsed = (parseYaml(readFileSync(INPUT_PATH, "utf-8")) as Input) ?? {};
++  } catch {
++    return;
++  }
++
++  const dims: Record<Dimension, { pct: number | null }> = {} as Record<Dimension, { pct: number | null }>;
++  for (const key of DIMENSIONS) {
++    dims[key] = { pct: clampPct(parsed?.dimensions?.[key]) };
++  }
++
++  const output = { dimensions: dims, updatedAt: new Date().toISOString() };
++  writeFileSync(OUTPUT_PATH, JSON.stringify(output, null, 2));
++}
++
++main();
+--- a/Releases/v5.0.0/.claude/PAI/statusline-command.sh
++++ b/Releases/v5.0.0/.claude/PAI/statusline-command.sh
+@@ -1146,7 +1146,7 @@
+ 
+ # ═══════════════════════════════════════════════════════════════════════════════
+ # LINE: STATE METER — dimension meters toward Ideal State
+-# Reads PAI/USER/TELOS/PAI_STATE.json (written by ComputeGap.ts on a schedule).
++# Reads PAI/USER/TELOS/PAI_STATE.json (written by WritePaiState.ts on SessionStart).
+ # Falls back to placeholder values if the state file is missing.
+ # Format: STATE: HEALTH 68%│CREATIVE 31%│FREEDOM 78%│RELATIONSHIPS 84%│FINANCIAL 42%
+ # ═══════════════════════════════════════════════════════════════════════════════
+@@ -1180,8 +1180,9 @@
+ _dims=(health creative freedom relationships money)
+ _labels=(HEALTH CREATIVE FREEDOM RELATIONS FIN)
+ # Fresh installs have no TELOS data yet — show N/A so the line reads "no signal"
+-# instead of misleadingly looking like real numbers. ComputeGap.ts populates
+-# PAI_STATE.json once the user runs /interview and rates dimensions.
++# instead of misleadingly looking like real numbers. WritePaiState.ts populates
++# PAI_STATE.json from PAI_STATE_INPUT.yaml on SessionStart, once the user has
++# rated dimensions (via /interview Phase 2 or by editing the YAML).
+ declare -a _pcts=(N/A N/A N/A N/A N/A)
+ 
+ if [ -f "$_PAI_STATE_JSON" ]; then
+--- a/Releases/v5.0.0/.claude/settings.json
++++ b/Releases/v5.0.0/.claude/settings.json
+@@ -360,6 +360,12 @@
+             "command": "$HOME/.claude/hooks/KVSync.hook.ts",
+             "timeout": 10,
+             "async": true
++          },
++          {
++            "type": "command",
++            "command": "$HOME/.claude/PAI/TOOLS/WritePaiState.ts",
++            "timeout": 10,
++            "async": true
+           }
+         ]
+       }
