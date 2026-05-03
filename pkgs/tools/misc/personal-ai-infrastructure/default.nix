@@ -38,6 +38,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0014-fix-repeatdetection-state-timing.patch
     ./patches/0015-add-root-package-json.patch
     ./patches/0016-add-pai-state-producer.patch
+    ./patches/0017-fix-observability-telos-schema.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];

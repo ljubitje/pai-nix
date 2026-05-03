@@ -1,0 +1,175 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 17:10:00 +0200
+Subject: [PATCH 17/17] Migrate observability.ts to /interview TELOS schema
+
+Upstream issue: danielmiessler/Personal_AI_Infrastructure#1153
+
+The /interview skill and Pulse/Observability/observability.ts use
+two different TELOS schemas. /interview Phase 2 + Phase 4 populate
+a directory-based layout (IDEAL_STATE/, CURRENT_STATE/); the Pulse
+Observability dashboard reads a flat-file layout (CURRENT.md,
+2036.md) and has zero references to the directories Interview
+produces. After running a complete /interview, the Life Dashboard
+renders empty/null for several major sections — looks broken even
+when the user did everything right.
+
+Per Q3 (user's choice in this pai-nix patch series): migrate
+observability to interview's schema. Interview's directory layout
+is the newer/richer schema and should win.
+
+Fix scope (5 hunks):
+
+  1. TELOS_FILE_ALLOWLIST extension — permit
+     IDEAL_STATE/{HEALTH,MONEY,FREEDOM,RELATIONSHIPS,CREATIVE}.md
+     and CURRENT_STATE/SNAPSHOT.md so the file editor endpoint
+     can write to those files.
+
+  2. validateTelosFileName — drop the blanket "/" rejection.
+     The allowlist itself is the authority on which slash-bearing
+     paths are valid; "\\" and ".." remain rejected as defense in
+     depth.
+
+  3. parseGoals — add header-form support (same fix family as
+     patch 0013 for GenerateTelosSummary). Bullet form continues
+     to win; "## G0: text" / "### G0: text" are the new fallback
+     that catches what /interview writes.
+
+  4. handleLifeHome — read CURRENT_STATE/SNAPSHOT.md. Fall back to
+     legacy CURRENT.md if SNAPSHOT.md absent (preserves behavior
+     for users with hand-maintained flat CURRENT.md). 2036.md
+     reader kept (best-effort) — file may not exist, timelineBlocks
+     resolves to 0.
+
+  5. handleTelosOverview — surface idealState (5 dimensions read
+     via parseSections from IDEAL_STATE/*.md) and snapshot (parsed
+     from CURRENT_STATE/SNAPSHOT.md). Both fields previously hard-
+     coded to null.
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/PAI/PULSE/Observability/observability.ts   :1086, 1098, 1554, 1672-1675, 2369
+
+Total: 1 file, 5 hunks.
+
+Co-existence: patch 0006 modified observability.ts at lines 69, 152,
+1650 (Pulse case-sensitivity fix). Non-overlapping with this
+patch's targets at 1086, 1098, 1554, 1672, 2369.
+
+Hunks generated via `diff -u` against the post-0016 result/ tree.
+No hand-counted @@ headers.
+
+Out of scope (per ISA Out of Scope):
+
+  - Dedicated /api/life/ideal-state endpoint — the
+    handleTelosOverview field is sufficient for current
+    consumers; if a separate endpoint is needed later, follow-up
+    patch.
+  - Backfilling /interview to also write CURRENT.md / 2036.md
+    legacy files — wrong direction; the issue's explicit guidance
+    is to migrate observability TO interview's schema.
+  - Running parseSections() on CURRENT.md fallback when SNAPSHOT
+    is present — handleLifeHome's existing code expects a flat
+    CURRENT.md format; SNAPSHOT.md is structurally similar enough
+    that parseBoldFields and parseNumberedList work on either.
+---
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/Observability/observability.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/Observability/observability.ts
+@@ -1089,6 +1089,11 @@
+   "METRICS.md", "TEAM.md", "BUDGET.md", "MODELS.md", "PREDICTIONS.md",
+   "FRAMES.md", "WRONG.md", "LEARNED.md", "IDEAS.md", "AUTHORS.md",
+   "BOOKS.md", "MOVIES.md", "TRAUMAS.md", "SPARKS.md", "NEW_TEST.md",
++  // IDEAL_STATE/ — written by /interview Phase 2 (5 dimensions).
++  "IDEAL_STATE/HEALTH.md", "IDEAL_STATE/MONEY.md", "IDEAL_STATE/FREEDOM.md",
++  "IDEAL_STATE/RELATIONSHIPS.md", "IDEAL_STATE/CREATIVE.md",
++  // CURRENT_STATE/ — written by /interview Phase 4.
++  "CURRENT_STATE/SNAPSHOT.md",
+ ])
+ 
+ function readMd(path: string): string {
+@@ -1097,7 +1102,10 @@
+ 
+ function validateTelosFileName(raw: unknown): { ok: true; name: string } | { ok: false; error: string } {
+   if (typeof raw !== "string") return { ok: false, error: "name must be a string" }
+-  if (raw.includes("/") || raw.includes("\\") || raw.includes("..")) return { ok: false, error: "invalid path" }
++  // Reject backslash and parent-dir references (defense in depth). Forward slash
++  // is permitted because some allowlist entries traverse into IDEAL_STATE/ and
++  // CURRENT_STATE/ subdirectories — the allowlist itself is the authority.
++  if (raw.includes("\\") || raw.includes("..")) return { ok: false, error: "invalid path" }
+   if (!raw.endsWith(".md")) return { ok: false, error: "must end with .md" }
+   if (!TELOS_FILE_ALLOWLIST.has(raw)) return { ok: false, error: "not an allowed TELOS file" }
+   return { ok: true, name: raw }
+@@ -1552,13 +1560,20 @@
+ }
+ 
+ function parseGoals(content: string): { id: string, text: string }[] {
+-  return content.split("\n")
+-    .filter(l => /^[-*]\s*\*{0,2}G\d+\*{0,2}:/.test(l))
+-    .map(l => {
+-      const m = l.match(/\*{0,2}(G\d+)\*{0,2}:\s*(.+)/)
+-      return m ? { id: m[1], text: m[2].trim() } : null
+-    })
+-    .filter(Boolean) as { id: string, text: string }[]
++  const out: { id: string, text: string }[] = []
++  for (const line of content.split("\n")) {
++    // Bullet form: "- **G0**: text" or "- G0: text"
++    if (/^[-*]\s*\*{0,2}G\d+\*{0,2}:/.test(line)) {
++      const m = line.match(/\*{0,2}(G\d+)\*{0,2}:\s*(.+)/)
++      if (m) out.push({ id: m[1], text: m[2].trim() })
++      continue
++    }
++    // Header form (canonical PAI source files after /interview): "## G0: text",
++    // "### G0: text". Strip a trailing "(parenthetical)" if present.
++    const header = line.match(/^#{2,4}\s+(G\d+):\s*(.+?)(?:\s*\(.*\))?\s*$/)
++    if (header) out.push({ id: header[1], text: header[2].trim() })
++  }
++  return out
+ }
+ 
+ function parseSections(content: string): { heading: string, body: string }[] {
+@@ -1671,9 +1686,16 @@
+ 
+ function handleLifeHome(): Response {
+   try {
+-    const current = readMd(join(TELOS_DIR, "CURRENT.md"))
++    // /interview Phase 4 writes to CURRENT_STATE/SNAPSHOT.md (directory layout).
++    // Fall back to the legacy CURRENT.md path if SNAPSHOT.md is absent —
++    // preserves behavior for users who hand-maintain a flat CURRENT.md and
++    // haven't run /interview Phase 4 yet.
++    const snapshot = readMd(join(TELOS_DIR, "CURRENT_STATE/SNAPSHOT.md"))
++    const current = snapshot || readMd(join(TELOS_DIR, "CURRENT.md"))
+     const goalsRaw = readMd(join(TELOS_DIR, "GOALS.md"))
+     const sparksRaw = readMd(join(TELOS_DIR, "SPARKS.md"))
++    // 2036.md is a legacy timeline file not produced by /interview. If absent,
++    // timelineBlocks resolves to 0 — UI degrades gracefully.
+     const timelineRaw = readMd(join(TELOS_DIR, "2036.md"))
+ 
+     const fields = parseBoldFields(current)
+@@ -2356,11 +2378,25 @@
+       title: c.title,
+     }))
+ 
++    // /interview Phase 2 writes IDEAL_STATE/*.md per dimension. Read all five
++    // and surface as a structured object so the dashboard can render them.
++    const idealStateDir = join(TELOS_DIR, "IDEAL_STATE")
++    const idealState = {
++      health:        parseSections(readMd(join(idealStateDir, "HEALTH.md"))),
++      money:         parseSections(readMd(join(idealStateDir, "MONEY.md"))),
++      freedom:       parseSections(readMd(join(idealStateDir, "FREEDOM.md"))),
++      relationships: parseSections(readMd(join(idealStateDir, "RELATIONSHIPS.md"))),
++      creative:      parseSections(readMd(join(idealStateDir, "CREATIVE.md"))),
++    }
++    // /interview Phase 4 writes CURRENT_STATE/SNAPSHOT.md.
++    const snapshotRaw = readMd(join(TELOS_DIR, "CURRENT_STATE/SNAPSHOT.md"))
++    const snapshot = snapshotRaw ? parseSections(snapshotRaw) : null
++
+     return Response.json({
+       owner: null,
+-      idealState: null,
++      idealState,
+       dimensions: null,
+-      snapshot: null,
++      snapshot,
+       problems,
+       missions,
+       goals,
