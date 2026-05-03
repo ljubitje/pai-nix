@@ -30,6 +30,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0006-fix-pulse-path-case.patch
     ./patches/0007-fix-prompt-classifier-slash-prefix.patch
     ./patches/0008-fix-installer-paidir-misnaming.patch
+    ./patches/0009-fix-remaining-mixed-case-paths.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];

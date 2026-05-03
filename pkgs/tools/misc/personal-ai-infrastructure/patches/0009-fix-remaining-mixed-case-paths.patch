@@ -1,0 +1,108 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 15:05:00 +0200
+Subject: [PATCH 9/9] Fix remaining mixed-case path bugs (TOOLS, ALGORITHM)
+
+Upstream issue: danielmiessler/Personal_AI_Infrastructure#1146
+
+Patch 0006 fixed all "Pulse" mixed-case path-construction sites in
+the Pulse subsystem (15 sites, 11 files). A wider audit reveals 4
+additional sites OUTSIDE Pulse using mixed-case names for canonical
+ALL-CAPS directories (PAI/ALGORITHM/, PAI/TOOLS/). On Linux's
+case-sensitive filesystem these resolve to non-existent paths; on
+macOS HFS+/APFS the bug is invisible.
+
+Sites fixed:
+
+  PAI/PULSE/modules/wiki.ts                         :44
+    join(PAI_DIR, "Algorithm")  →  join(PAI_DIR, "ALGORITHM")
+    The wiki module reads ~/.claude/PAI/Algorithm/ — non-existent
+    on Linux. /api/wiki/algorithm endpoint returns nothing even
+    though ~/.claude/PAI/ALGORITHM/v6.3.0.md exists.
+
+  PAI/PAI-Install/engine/actions.ts                 :~1530 (post-0008)
+    `alias pai='bun ${join(paiDir, "PAI", "Tools", "pai.ts")}'`
+    The installer writes a .zshrc/.bashrc alias pointing to
+    ~/.claude/PAI/Tools/pai.ts — non-existent on Linux.
+    Cited verbatim in #1146 reproduction transcript. NixOS gates
+    this branch via PAI_NIX_INSTALL=1 (patch 0005), but the
+    patched binary should still emit the correct alias for non-Nix
+    Linux users.
+
+  PAI/TOOLS/pai.ts                                  :34
+    join(homedir(), ".claude", "PAI", "Tools", "Banner.ts")
+    The pai REPL fails to load its banner script on Linux.
+
+  PAI/TOOLS/MemoryRetriever.ts                      :286
+    path.join(PAI_DIR, "Tools", "Inference.ts")
+    MemoryRetriever can't find Inference.ts on Linux; the inference
+    fallback path silently bails.
+
+Sites considered but NOT changed (correctness-preserving):
+
+  PAI/PAI-Install/engine/actions.ts:1405
+    join(skillsDir, s.name, "Tools")
+    skills/<name>/Tools/ is the canonical mixed-case path. Upstream
+    tarball ships .claude/skills/Aphorisms/Tools/, not /TOOLS/.
+
+  PAI/PULSE/modules/wiki.ts:184  group: "Algorithm"
+  PAI/PULSE/modules/wiki.ts:790  label: "Documentation"
+  PAI/TOOLS/ActivityParser.ts:594-597  categoryNames map
+    Display labels for human-readable section headers, not paths.
+
+  PAI/TOOLS/ArchitectureSummaryGenerator.ts:27
+    path.join(PAI_DIR, "DOCUMENTATION", "Memory", "MemorySystem.md")
+    DOCUMENTATION children are intentionally mixed-case in upstream
+    (Agents, Algorithm, Memory, Notifications, etc.). Path correct.
+
+Co-existence: patches 0005 and 0008 both modify actions.ts but at
+non-overlapping line ranges. Hunks generated via `diff -u` against
+the post-0008 result/ tree to ensure line numbers match the
+post-0001-0008 state at patch-application time.
+
+Total: 4 files, 4 hunks, 4 line changes.
+---
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/modules/wiki.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/modules/wiki.ts
+@@ -41,7 +41,7 @@
+ const KNOWLEDGE_DIR = join(PAI_DIR, "MEMORY", "KNOWLEDGE")
+ const BOOKMARKS_DIR = join(PAI_DIR, "MEMORY", "BOOKMARKS")
+ const BOOKMARKS_CSV = join(BOOKMARKS_DIR, "bookmarks.csv")
+-const ALGORITHM_DIR = join(PAI_DIR, "Algorithm")
++const ALGORITHM_DIR = join(PAI_DIR, "ALGORITHM")
+ const SKILLS_DIR = join(HOME, ".claude", "skills")
+ const HOOKS_DIR = join(HOME, ".claude", "hooks")
+ const SETTINGS_PATH = join(HOME, ".claude", "settings.json")
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
+@@ -1527,7 +1527,7 @@
+     const userShell = process.env.SHELL || "/bin/zsh";
+     const rcFile = userShell.includes("bash") ? ".bashrc" : userShell.includes("fish") ? ".config/fish/config.fish" : ".zshrc";
+     const rcPath = join(homedir(), rcFile);
+-    const aliasLine = `alias pai='bun ${join(paiDir, "PAI", "Tools", "pai.ts")}'`;
++    const aliasLine = `alias pai='bun ${join(paiDir, "PAI", "TOOLS", "pai.ts")}'`;
+     const marker = "# PAI alias";
+ 
+     if (existsSync(rcPath)) {
+--- a/Releases/v5.0.0/.claude/PAI/TOOLS/pai.ts
++++ b/Releases/v5.0.0/.claude/PAI/TOOLS/pai.ts
+@@ -31,7 +31,7 @@
+ const CLAUDE_DIR = join(homedir(), ".claude");
+ const MCP_DIR = join(CLAUDE_DIR, "MCPs");
+ const ACTIVE_MCP = join(CLAUDE_DIR, ".mcp.json");
+-const BANNER_SCRIPT = join(homedir(), ".claude", "PAI", "Tools", "Banner.ts");
++const BANNER_SCRIPT = join(homedir(), ".claude", "PAI", "TOOLS", "Banner.ts");
+ const VOICE_SERVER = "http://localhost:31337/notify/personality";
+ const WALLPAPER_DIR = join(homedir(), "Projects", "Wallpaper");
+ // Note: RAW archiving removed - Claude Code handles its own cleanup (30-day retention in projects/)
+--- a/Releases/v5.0.0/.claude/PAI/TOOLS/MemoryRetriever.ts
++++ b/Releases/v5.0.0/.claude/PAI/TOOLS/MemoryRetriever.ts
+@@ -283,7 +283,7 @@
+ // ============================================================================
+ 
+ function compress(text: string, budget: number): string {
+-  const inferPath = path.join(PAI_DIR, "Tools", "Inference.ts");
++  const inferPath = path.join(PAI_DIR, "TOOLS", "Inference.ts");
+ 
+   if (!fs.existsSync(inferPath)) {
+     // Fallback: truncate to approximate token count
