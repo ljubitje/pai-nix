@@ -26,6 +26,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0002-add-linux-support-to-pulse.patch
     ./patches/0003-add-pulse-package-json.patch
     ./patches/0004-nixos-installer-fixes.patch
+    ./patches/0005-fix-validator-spurious-failures.patch
+    ./patches/0006-fix-pulse-path-case.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];
@@ -37,12 +39,37 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     # Install the release template into the Nix store.
     install -dm755 $out/share/personal-ai-infrastructure
     cp -r Releases/v${finalAttrs.version}/.claude $out/share/personal-ai-infrastructure/
+
+    # Strip Cursor IDE editor metadata. Upstream PAI v5.0.0 commits .cursor/
+    # directories under PULSE/Observability and two skills/*/Tools paths,
+    # each containing a relative symlink ../../CLAUDE.md. The wrapper's
+    # cp -r + chmod -R rewrites those targets as absolute self-loops in
+    # the user's tree, and Bun's fs walk crashes Pulse with ELOOP on first
+    # encounter. Editor configs have zero runtime relevance — strip at
+    # build time so the user tree never receives them.
+    find $out/share/personal-ai-infrastructure -type d -name '.cursor' \
+      -exec rm -rf {} + 2>/dev/null || true
+
+    # Defensive: delete any broken symlinks (-xtype l matches symlinks whose
+    # target does not resolve). PAI has shipped broken symlinks before
+    # (issues #664, #823, #880, plus the v5.0 .cursor case). When the next
+    # upstream release introduces a similar relative-target symlink that
+    # breaks under cp -r relocation, this catches it at build time and
+    # prevents Bun fs.watch / fs.readdir from encountering an ELOOP. Only
+    # broken links are removed; valid symlinks stay intact.
+    find $out/share/personal-ai-infrastructure -xtype l -delete 2>/dev/null || true
+
     # Install the wrapper script.
     install -dm755 $out/bin
     cat > $out/bin/pai << 'WRAPPER'
     #!/@bash@/bin/bash
     set -euo pipefail
     export PATH="@bun@/bin:@nodejs@/bin:@git@/bin:@curl@/bin:@jq@/bin:@claude-code@/bin:$PATH"
+
+    # Deterministic NixOS marker. The upstream installer's NixOS-conditional
+    # branches read this — replaces the broken `process.env.NIX_STORE` runtime
+    # check (NIX_STORE is build-time-only and is empty in user-shell runtime).
+    export PAI_NIX_INSTALL=1
 
     PAI_SHARE="@out@/share/personal-ai-infrastructure/.claude"
     PAI_MARKER="$HOME/.claude/.pai-version"
