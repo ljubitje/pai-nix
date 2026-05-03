@@ -1,0 +1,213 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 16:20:00 +0200
+Subject: [PATCH 14/14] Fix RepeatDetection state-save timing (upstream PR #1156)
+
+Upstream issue:  danielmiessler/Personal_AI_Infrastructure#1155
+Upstream PR:     danielmiessler/Personal_AI_Infrastructure#1156
+
+hooks/RepeatDetection.hook.ts saves comparison state on every
+UserPromptSubmit (line 105), BEFORE checking similarity and BEFORE
+the prompt is processed by Claude. As a result:
+
+  1. Cancelled-then-edited prompts cause false positives. If the
+     user submits a prompt, cancels Claude mid-response (or before
+     it starts), edits the prompt, and resubmits — the hook treats
+     the cancelled draft as the comparison baseline and the
+     corrected resubmission as a "repeat."
+
+  2. Blocked submissions create an unrecoverable retry loop. When
+     the hook fires `exit 2`, it has already written the blocked
+     attempt to last-prompt.json. The user's retry is then compared
+     against the blocked attempt (necessarily very similar to the
+     user's intent), which re-blocks. State keeps refreshing to
+     each blocked attempt; user cannot escape without rephrasing
+     substantially or manually deleting the state file.
+
+The intended trigger is the user repeating a prompt AFTER Claude
+responded — the signal the model missed the user's intent. The
+current implementation triggers on the user repeating a prompt
+after their previous SUBMISSION ATTEMPT, regardless of whether
+Claude saw or responded to it.
+
+Fix (verbatim from upstream PR #1156, applied here as a defensive
+package-level patch):
+
+  - hooks/RepeatDetection.hook.ts (UserPromptSubmit): read from
+    last-prompt.json (the prompt Claude actually responded to) for
+    the comparison; write current submission to a new
+    pending-prompt.json instead of overwriting the comparison
+    baseline. saveCurrentPrompt → stagePendingPrompt.
+  - hooks/RepeatDetectionPromote.hook.ts (NEW Stop hook): when
+    Claude finishes responding, promote pending-prompt.json →
+    last-prompt.json and delete the pending file.
+  - settings.json: register the new Stop hook in the Stop chain.
+
+After the fix:
+
+  - Cancelled / blocked / abandoned prompts never reach Stop, so
+    they never become the comparison baseline.
+  - Each block compares against the same anchored baseline (the
+    last responded-to prompt), so blocks no longer escalate.
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/hooks/RepeatDetection.hook.ts             :15-17, 72, 79-83, 91, 95, 104-105, 123-126
+  Releases/v5.0.0/.claude/hooks/RepeatDetectionPromote.hook.ts      NEW (40 lines, executable)
+  Releases/v5.0.0/.claude/settings.json                             :385 (add to Stop chain)
+
+Total: 3 files (2 modified + 1 new), 7 hunks.
+
+Co-existence: patch 0012 modifies settings.json's PostToolUse and
+adds PostToolUseFailure (lines ~234, ~258). The Stop chain is at
+line ~385 post-0012; this patch's hunk is generated against
+post-0013 result/ tree.
+
+Hunks generated via `diff -u` against post-0013 result/ tree (for
+the modified files) and against /dev/null (for the new file). New
+file headers (diff --git / new file mode 100755 / index 0000000..)
+inserted manually because diff -u alone doesn't emit the git-format
+new-file framing required for nix's patch -p1 invocation.
+---
+--- a/Releases/v5.0.0/.claude/hooks/RepeatDetection.hook.ts
++++ b/Releases/v5.0.0/.claude/hooks/RepeatDetection.hook.ts
+@@ -12,10 +12,18 @@
+ import { readFileSync, writeFileSync, existsSync } from "fs";
+ import { join } from "path";
+ 
+-const STATE_FILE = join(
++// Read from last-prompt.json (the prompt Claude actually responded to).
++// Write current submission to pending-prompt.json (staged; promoted to last-prompt
++// only when the Stop hook runs, i.e., after Claude responds). This way cancelled
++// or blocked prompts never become the comparison baseline.
++const RESPONDED_PROMPT_FILE = join(
+   process.env.HOME || "",
+   ".claude/PAI/MEMORY/STATE/last-prompt.json",
+ );
++const PENDING_PROMPT_FILE = join(
++  process.env.HOME || "",
++  ".claude/PAI/MEMORY/STATE/pending-prompt.json",
++);
+ 
+ interface HookInput {
+   session_id: string;
+@@ -69,16 +77,16 @@
+ 
+   // Skip very short messages (ratings, acknowledgments, greetings)
+   if (currentPrompt.length < 20) {
+-    saveCurrentPrompt(currentPrompt, input.session_id);
++    stagePendingPrompt(currentPrompt, input.session_id);
+     process.exit(0);
+   }
+ 
+-  // Load previous prompt
++  // Load the last prompt Claude actually responded to (promoted by Stop hook).
+   let previousPrompt = "";
+   let previousSessionId = "";
+-  if (existsSync(STATE_FILE)) {
++  if (existsSync(RESPONDED_PROMPT_FILE)) {
+     try {
+-      const state = JSON.parse(readFileSync(STATE_FILE, "utf-8"));
++      const state = JSON.parse(readFileSync(RESPONDED_PROMPT_FILE, "utf-8"));
+       previousPrompt = state.prompt || "";
+       previousSessionId = state.session_id || "";
+     } catch {
+@@ -88,11 +96,11 @@
+ 
+   // Only compare within the same session
+   if (previousSessionId !== input.session_id || !previousPrompt) {
+-    saveCurrentPrompt(currentPrompt, input.session_id);
++    stagePendingPrompt(currentPrompt, input.session_id);
+     process.exit(0);
+   }
+ 
+-  // Compare current to previous
++  // Compare current to previous (last responded-to prompt)
+   const currentTokens = tokenize(currentPrompt);
+   const previousTokens = tokenize(previousPrompt);
+ 
+@@ -101,8 +109,10 @@
+ 
+   const similarity = jaccardSimilarity(currentGrams, previousGrams);
+ 
+-  // Save current prompt as the new "previous"
+-  saveCurrentPrompt(currentPrompt, input.session_id);
++  // Stage current prompt for promotion. Only promoted to last-prompt by the Stop
++  // hook after Claude responds, so cancelled / blocked prompts never poison the
++  // comparison baseline.
++  stagePendingPrompt(currentPrompt, input.session_id);
+ 
+   // Threshold: 0.6 (60%) similarity triggers warning
+   if (similarity >= 0.6) {
+@@ -120,10 +130,10 @@
+   process.exit(0);
+ }
+ 
+-function saveCurrentPrompt(prompt: string, sessionId: string): void {
++function stagePendingPrompt(prompt: string, sessionId: string): void {
+   try {
+     writeFileSync(
+-      STATE_FILE,
++      PENDING_PROMPT_FILE,
+       JSON.stringify({
+         prompt,
+         session_id: sessionId,
+diff --git a/Releases/v5.0.0/.claude/hooks/RepeatDetectionPromote.hook.ts b/Releases/v5.0.0/.claude/hooks/RepeatDetectionPromote.hook.ts
+new file mode 100755
+index 0000000..0000001
+--- /dev/null
++++ b/Releases/v5.0.0/.claude/hooks/RepeatDetectionPromote.hook.ts
+@@ -0,0 +1,40 @@
++#!/usr/bin/env bun
++/**
++ * RepeatDetectionPromote.hook.ts - Stop hook
++ *
++ * Promotes pending-prompt.json -> last-prompt.json after Claude responds.
++ * Pairs with RepeatDetection.hook.ts (UserPromptSubmit), which stages the
++ * submitted prompt as "pending." Only prompts Claude actually responded to
++ * become the comparison baseline for future repeat detection - cancelled
++ * and blocked prompts never poison the state.
++ */
++
++import { readFileSync, writeFileSync, existsSync, unlinkSync } from "fs";
++import { join } from "path";
++
++const RESPONDED_PROMPT_FILE = join(
++  process.env.HOME || "",
++  ".claude/PAI/MEMORY/STATE/last-prompt.json",
++);
++const PENDING_PROMPT_FILE = join(
++  process.env.HOME || "",
++  ".claude/PAI/MEMORY/STATE/pending-prompt.json",
++);
++
++function main(): void {
++  if (!existsSync(PENDING_PROMPT_FILE)) {
++    process.exit(0);
++  }
++
++  try {
++    const pending = readFileSync(PENDING_PROMPT_FILE, "utf-8");
++    writeFileSync(RESPONDED_PROMPT_FILE, pending);
++    unlinkSync(PENDING_PROMPT_FILE);
++  } catch {
++    // Non-critical - silently fail.
++  }
++
++  process.exit(0);
++}
++
++main();
+--- a/Releases/v5.0.0/.claude/settings.json
++++ b/Releases/v5.0.0/.claude/settings.json
+@@ -382,6 +382,10 @@
+           {
+             "type": "command",
+             "command": "$HOME/.claude/hooks/DocIntegrity.hook.ts"
++          },
++          {
++            "type": "command",
++            "command": "$HOME/.claude/hooks/RepeatDetectionPromote.hook.ts"
+           }
+         ]
+       }

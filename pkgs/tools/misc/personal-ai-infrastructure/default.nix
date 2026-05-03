@@ -35,6 +35,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0011-fix-system-prompt-placeholder-substitution.patch
     ./patches/0012-fix-hook-registration.patch
     ./patches/0013-fix-generate-telos-summary-parser.patch
+    ./patches/0014-fix-repeatdetection-state-timing.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];
