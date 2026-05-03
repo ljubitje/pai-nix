@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 17:30:00 +0200
+Subject: [PATCH 18/18] Emit step_skip event for every Telegram skip path
+
+Upstream issue: danielmiessler/Personal_AI_Infrastructure (TBD)
+
+In the v5.0 GUI installer, runTelegramSetup() in
+PAI/PAI-Install/engine/actions.ts has five skip paths
+(user-skipped / no-token-entered / invalid-token /
+no-allowed-users / env-write-failed). Each one calls a
+file-local skipStep() helper that mutates state.skippedSteps
+in memory but never emits the corresponding `step_skip`
+EngineEvent. The web installer's WebSocket bridge in
+web/routes.ts:71-72 listens for that event and only then
+broadcasts `{ type: "step_update", step: "telegram", status:
+"skipped" }` to the browser.
+
+Net effect: the user picks "Skip Telegram", the engine moves
+on, validation runs, and the install completes — but step 8
+stays highlighted "active" in the GUI sidebar forever, while
+the bottom-right "INSTALLATION COMPLETE" banner is rendered.
+The two states contradict each other on screen and the user
+reasonably interprets the install as broken.
+
+This patch keeps the local skipStep helper (its in-memory
+mutation is still needed by the outer flow's
+`if (!state.skippedSteps.includes(...))` guards), but adds
+an `await emit({ event: "step_skip", step: "telegram",
+reason })` call immediately before each skipStep(...) call
+so the GUI receives the step transition at the moment the
+engine records it. The leading "Skipped Telegram setup..."
+message stays — it's the human-readable assistant message,
+distinct from the structured step_skip event.
+
+The same architectural shape exists in runVoiceSetup (skip
+paths there don't emit step_skip either) but voice's skip
+path is mostly handled by routes.ts's catch block which
+calls the engine's exported skipStep — and the user-visible
+symptom doesn't manifest there because voice's UI behavior
+masks it. Telegram is the visible victim because skipping
+it is a deliberate, common user choice. A broader sweep
+across all step runners is left for a follow-up; this patch
+fixes the bug the user reported.
+
+The comment block on the local skipStep helper is updated
+to document the caller-emits-event contract so the next
+person to touch this code doesn't reintroduce the bug by
+adding a sixth skip path that forgets the emit.
+---
+ .claude/PAI/PAI-Install/engine/actions.ts | 18 +++++++++++++++---
+ 1 file changed, 15 insertions(+), 3 deletions(-)
+
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
+@@ -2245,6 +2245,7 @@
+
+   if (wantsTelegram !== "yes") {
+     await emit({ event: "message", content: "Skipped Telegram setup. Add later: TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOWED_USERS in ~/.claude/.env, then bash ~/.claude/PAI/PULSE/manage.sh restart" });
++    await emit({ event: "step_skip", step: "telegram", reason: "user-skipped" });
+     skipStep(state, "telegram", "user-skipped");
+     return;
+   }
+@@ -2301,6 +2302,7 @@
+     const trimmed = entered.trim();
+     if (!trimmed) {
+       await emit({ event: "message", content: "No token entered. Skipping Telegram setup." });
++      await emit({ event: "step_skip", step: "telegram", reason: "no-token-entered" });
+       skipStep(state, "telegram", "no-token-entered");
+       return;
+     }
+@@ -2308,6 +2310,7 @@
+     const result = await validateTelegramBotToken(trimmed);
+     if (!result.valid) {
+       await emit({ event: "message", content: `Token validation failed: ${result.error}. Skipping Telegram setup.` });
++      await emit({ event: "step_skip", step: "telegram", reason: "invalid-token" });
+       skipStep(state, "telegram", "invalid-token");
+       return;
+     }
+@@ -2330,6 +2333,7 @@
+   }
+   if (!allowedUsers) {
+     await emit({ event: "message", content: "No allowed user/chat ID provided. Bot will not respond to anyone (unsafe). Skipping." });
++    await emit({ event: "step_skip", step: "telegram", reason: "no-allowed-users" });
+     skipStep(state, "telegram", "no-allowed-users");
+     return;
+   }
+@@ -2346,6 +2350,7 @@
+     await emit({ event: "message", content: "Telegram credentials written to ~/.claude/.env." });
+   } catch (err: any) {
+     await emit({ event: "message", content: `Could not write .env: ${err?.message || err}. Telegram bot will not start.` });
++    await emit({ event: "step_skip", step: "telegram", reason: "env-write-failed" });
+     skipStep(state, "telegram", "env-write-failed");
+     return;
+   }
+@@ -2363,8 +2368,15 @@
+   await emit({ event: "step_complete", step: "telegram" });
+ }
+
+-// Helper used by runTelegramSetup. Local re-export shim to avoid touching the
+-// generic skip flow up top — the runners already handle skippedSteps.
++// Helper used by runTelegramSetup. Mutates state.skippedSteps so the outer
++// install flow's `if (!state.skippedSteps.includes(...))` guards observe
++// the skip. Step-skip EVENT emission (which drives UI updates in the web
++// installer) is the caller's responsibility — every callsite in
++// runTelegramSetup pairs `skipStep(...)` with a preceding
++// `await emit({ event: "step_skip", step: "telegram", reason })`. Without
++// the emit, the engine mutates state but the GUI never receives the
++// step transition, leaving step 8 highlighted "active" indefinitely
++// even though the engine has moved on to validation.
+ function skipStep(state: InstallState, step: StepId, _reason: string): void {
+   if (!state.skippedSteps.includes(step)) state.skippedSteps.push(step);
+ }
