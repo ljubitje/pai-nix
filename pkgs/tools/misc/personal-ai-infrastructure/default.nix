@@ -110,8 +110,61 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       fi
 
       echo "Installing PAI v@version@ to ~/.claude ..."
-      cp -r "$PAI_SHARE" "$HOME/.claude"
+      # ── Race-safe install copy ─────────────────────────────────────
+      # Why `cp -rT` instead of `cp -r`:
+      # The user runs `pai --force-install` from inside a live Claude
+      # Code session. Claude Code writes session logs to
+      # `~/.claude/projects/<slug>/<uuid>.jsonl` continuously — every
+      # tool call and message lands there. If even one write happens
+      # in the millisecond window between `mv "$HOME/.claude"
+      # "$BACKUP"` above and the next `cp` below, Claude Code
+      # silently recreates `~/.claude/projects/<slug>/` to land its
+      # next log line. With plain `cp -r SRC DEST`, when DEST exists
+      # cp nests: `~/.claude/.claude/install.sh`, `~/.claude/.claude/
+      # PAI/PAI-Install/...`, etc. The wizard then can't find
+      # `$HOME/.claude/install.sh`, `bash: install.sh: No such file or
+      # directory` returns 127, and `.pai-installing` stays behind
+      # forever. The user sees "previous install was interrupted" on
+      # every launch and has no way out except --force-install — which
+      # falls into the exact same race.
+      #
+      # `cp -rT` (GNU --no-target-directory) treats DEST as a final
+      # path, not a parent — copies SRC's contents into DEST whether
+      # DEST pre-exists or not. Concurrent claude session writes to
+      # `~/.claude/projects/` survive (cp doesn't touch unrelated
+      # subtrees) and the release tree lands at the correct depth.
+      mkdir -p "$HOME/.claude"
+      cp -rT "$PAI_SHARE" "$HOME/.claude"
       chmod -R u+w "$HOME/.claude"
+
+      # ── Expand ''${HOME}/$HOME literals in settings.json ──────────────
+      # Claude Code passes settings.json `env` values to subprocesses
+      # AS-IS — it does NOT shell-expand ''${HOME} before propagating to
+      # statusline / hooks / Bash tool subprocess env. Result: the
+      # statusline (cwd = wherever the user launched claude, e.g.
+      # /home/ai) reads PAI_DIR="''${HOME}/.claude/PAI" literally and
+      # `mkdir -p` creates a literal `''${HOME}` directory in cwd, six
+      # characters wide ($, {, H, O, M, E, }). Symptom in the wild:
+      # `/home/ai/''${HOME}/.claude/PAI/.quote-cache`, `…/MEMORY/STATE/
+      # learning-cache.sh`, model/location/weather-caches.
+      #
+      # Patch 0010 (upstream #1124) fixes the *installer's* output —
+      # but the bug fires from the release-shipped settings.json
+      # *before* the installer ever rewrites it (concurrent claude
+      # session reading settings.json mid-install, or any post-install
+      # subprocess invocation). Pre-expanding here defends every
+      # subprocess from the moment cp finishes.
+      #
+      # Scope: replace `''${HOME}` and `$HOME` (both forms upstream
+      # ships) with the user's real home path. Hook command paths
+      # also use `$HOME/.claude/hooks/...` — substituting to absolute
+      # is benign (Claude Code accepts absolute paths and skips its
+      # own expansion step). Other settings tokens (''${PAI_DIR},
+      # ''${PROJECTS_DIR}) are not touched.
+      sed -i \
+        -e "s|\''${HOME}|$HOME|g" \
+        -e "s|\$HOME|$HOME|g" \
+        "$HOME/.claude/settings.json"
 
       # ── Reliable install lifecycle ──────────────────────────────────
       # Marker semantics: .pai-installing exists for the duration of the
