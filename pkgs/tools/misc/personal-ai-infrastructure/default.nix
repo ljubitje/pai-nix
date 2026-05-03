@@ -40,6 +40,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0016-add-pai-state-producer.patch
     ./patches/0017-fix-observability-telos-schema.patch
     ./patches/0018-fix-telegram-step-skip-event.patch
+    ./patches/0019-fix-pulse-deps-before-manage-install.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];

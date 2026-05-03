@@ -1,0 +1,132 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Sun, 3 May 2026 17:15:00 +0200
+Subject: [PATCH 19/19] Install Pulse deps before invoking manage.sh
+
+Upstream issue: danielmiessler/Personal_AI_Infrastructure (TBD) — bug
+applies to every platform, not Nix-specific.
+
+The v5.0 GUI/CLI installer's `installPulse()` in
+PAI/PAI-Install/engine/actions.ts:1604 spawns `manage.sh install`,
+which boots `pulse.ts` and probes :31337 for a successful bind. When
+the bind fails, the wizard reports the cryptic message "Pulse install
+command failed. Voice notifications will not be available."
+
+Reproduction (NixOS — easiest surface; same root cause on macOS/Linux
+fresh-install paths too):
+
+  $ ./result/bin/pai --force-install
+  ... wizard runs through detection, file copy, identity, voice ...
+  ⚠  Pulse install command failed.
+
+  $ tail ~/.claude/PAI/PULSE/logs/pulse-stderr.log
+  error: Cannot find package 'smol-toml' from
+  '/home/user/.claude/PAI/PULSE/pulse.ts'
+  Bun v1.3.11 (Linux x64)
+
+Root cause — the wizard's own migration step deletes the deps:
+
+  1. The Nix wrapper `cp -r`s the read-only template into ~/.claude
+     and runs `cd ~/.claude/PAI/PULSE && bun install` to populate
+     node_modules.
+  2. The wizard's `moveExistingClaudeToBackup` (actions.ts:605) then
+     iterates ~/.claude/PAI/ and `rmSync(..., { recursive: true,
+     force: true })` on every entry except PAI-Install (lines 654-
+     663). PULSE/, including its freshly-installed node_modules, is
+     wiped.
+  3. `installFromLocalBundle` (actions.ts:1129) re-copies the bundle
+     tree but its BUNDLE_COPY_EXCLUDES set (line 1074) deliberately
+     skips node_modules — the bundle is never the source of deps.
+  4. `installPulse` (actions.ts:1604) then spawns `manage.sh install`.
+     manage.sh starts pulse.ts directly (Linux) or via launchd
+     (macOS). pulse.ts's first import is `smol-toml`; without it,
+     the daemon crashes before binding :31337. manage.sh's port-bind
+     probe times out and exits 1. installPulse() reports failure.
+
+The same flow exists on macOS (the wrapper isn't there to compensate),
+which means this is an upstream bug, not Nix-specific. macOS users
+who run `bash install.sh` cleanly hit the identical failure mode on
+first install — the bundle never ships node_modules, and nothing in
+the install path runs `bun install` for PULSE before manage.sh tries
+to start the daemon.
+
+Fix — add an explicit `bun install` step inside `installPulse()`,
+before the `manage.sh install` spawn. The step is:
+
+  - Idempotent: bun install is fast (~30ms) when the lockfile is
+    satisfied, so the cost is negligible on hosts where deps happen
+    to already be present.
+  - Loud on failure: if bun install exits non-zero (registry
+    unreachable, no network, lockfile mismatch), the wizard now
+    surfaces the actual failure mode instead of swallowing it under
+    the misleading "manage.sh install command failed" string and
+    leaves the user a copy-paste recovery command.
+  - Bounded: 180s timeout (cold network case for 109 packages),
+    well within the wizard's "Voice + Pulse" step budget.
+
+Files touched:
+
+  - PAI/PAI-Install/engine/actions.ts (1 hunk, +30 lines)
+
+Verification on NixOS after this patch:
+
+  $ ./result/bin/pai --force-install
+  ... wizard runs ...
+  ✓ Pulse installed and running on port 31337.
+  $ curl -s http://localhost:31337/notify -d '{"message":"","voice_enabled":false}'
+  (200 OK — :31337 bound)
+
+  $ ls ~/.claude/PAI/PULSE/node_modules/smol-toml
+  dist  LICENSE  package.json  README.md
+
+This patch is intentionally upstream-shaped — it fixes the bug for
+every PAI v5.0 user, not just Nix users. The Nix wrapper's own
+`cd PULSE && bun install` line in default.nix becomes redundant
+after this patch (the wizard now guarantees deps), but is kept as a
+defensive belt-and-braces measure: if a future upstream change moves
+Pulse deps elsewhere or skips this function, the wrapper's earlier
+install still produces a usable tree the user can run pulse from
+manually.
+---
+ .../v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts          | 30 +++++++++++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
+@@ -1610,6 +1610,36 @@
+     return false;
+   }
+
++  // Ensure Pulse's runtime dependencies are installed before invoking
++  // manage.sh. The wizard's earlier `moveExistingClaudeToBackup` clears
++  // ~/.claude/PAI/* (everything except PAI-Install) and the subsequent
++  // `installFromLocalBundle` deliberately excludes node_modules from the
++  // bundle copy. Net effect: by the time we reach this function, the
++  // freshly-laid PULSE tree has no node_modules. pulse.ts's first import
++  // is `smol-toml`; without it the daemon crashes on boot, manage.sh's
++  // port-bind probe never sees :31337, and the user gets the mysterious
++  // "Pulse install command failed" with no actionable signal.
++  // bun install is idempotent and fast when the lockfile is satisfied,
++  // so the cost is negligible on hosts where deps already happen to be
++  // present (e.g. NixOS where the wrapper pre-populates them — though
++  // those get wiped by the migration step on first install too).
++  await emit({ event: "progress", step: "voice", percent: 10, detail: "Installing Pulse dependencies..." });
++
++  const depsOk = await new Promise<boolean>((resolve) => {
++    const child = spawn("bun", ["install"], {
++      cwd: pulseDir,
++      stdio: ["ignore", "pipe", "pipe"],
++    });
++    const timer = setTimeout(() => { child.kill(); resolve(false); }, 180000);
++    child.on("close", (code) => { clearTimeout(timer); resolve(code === 0); });
++    child.on("error", () => { clearTimeout(timer); resolve(false); });
++  });
++
++  if (!depsOk) {
++    await emit({ event: "message", content: "Pulse dependency install failed (bun install in PAI/PULSE). Voice notifications will be unavailable. Retry manually: cd ~/.claude/PAI/PULSE && bun install && bash manage.sh install" });
++    return false;
++  }
++
+   await emit({ event: "progress", step: "voice", percent: 20, detail: "Installing Pulse (voice + dashboard + observability)..." });
+
+   try {
