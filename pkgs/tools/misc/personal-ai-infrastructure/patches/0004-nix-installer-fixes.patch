@@ -1,26 +1,43 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: pai-nix <pai-nix@localhost>
 Date: Fri, 2 May 2026 13:00:00 +0200
-Subject: [PATCH 4/4] NixOS installer fixes
+Subject: [PATCH 4/N] Nix installer fixes (any Nix-built install)
 
-On NixOS, the Nix wrapper provides `pai` on PATH — the installer
-must not inject shell aliases, show macOS-specific prompts, or
-display incorrect launch instructions.
+Under any Nix install (NixOS, Nix-on-Ubuntu, Nix-on-macOS), the
+pai-nix wrapper provides `pai` on PATH directly — the upstream
+installer must not inject shell aliases, show macOS-specific prompts,
+or display incorrect launch instructions. Linux + macOS platform
+distinctions still apply orthogonally to the Nix-install distinction
+(macOS has launchd + menu bar; Linux does not).
 
 Changes:
-- Guard shell alias injection with NIX_STORE env check
-- Show `pai` instead of `source ~/.zshrc && pai` on NixOS
-- Skip macOS menu bar app prompt on Linux
-- Use platform-appropriate Pulse wording on Linux
-- Skip launchd plist validation on Linux
-- Skip shell alias validation on NixOS
-- Wait 5 seconds before process.exit so user can read summary (non-NixOS only)
-- Fix Electron GUI: extend auto-close from 3s to 30s so user can read summary
-- Fix Electron GUI: show `pai` instead of `source ~/.zshrc && pai`
-- Fix Electron GUI: window is created but hidden behind other windows or on
-  another virtual desktop, leading users to think the GUI never opened. Show
-  on did-finish-load, center on primary display, briefly raise to top, and
-  log lifecycle events so failures are visible instead of silent.
+- Guard shell alias injection with the Nix-install marker (initially
+  NIX_STORE; corrected to PAI_NIX_INSTALL by patch 0005 — see note
+  below).
+- Show `pai` instead of `source ~/.zshrc && pai` under any Nix
+  install.
+- Skip macOS menu bar app prompt on Linux (`process.platform`
+  check, not Nix-related).
+- Use platform-appropriate Pulse wording on Linux (same).
+- Skip launchd plist validation on Linux (same).
+- Skip shell alias validation under any Nix install.
+- Wait 5 seconds before process.exit so user can read summary (only
+  outside Nix-built installs; Nix wrapper keeps the terminal open).
+- Fix Electron GUI: extend auto-close from 3s to 30s so user can
+  read summary.
+- Fix Electron GUI: show `pai` instead of `source ~/.zshrc && pai`.
+- Fix Electron GUI: window is created but hidden behind other
+  windows or on another virtual desktop, leading users to think the
+  GUI never opened. Show on did-finish-load, center on primary
+  display, briefly raise to top, and log lifecycle events so
+  failures are visible instead of silent.
+
+Note: this patch's hunks gate on `process.env.NIX_STORE`. NIX_STORE
+is build-time-only — it is empty in user-shell runtime. Patch 0005
+corrects every gate to `process.env.PAI_NIX_INSTALL`, the explicit
+runtime marker the pai-nix wrapper exports. Intermediate state
+(after 0004 but before 0005) has the broken gate; only the final
+post-0005 state is correct.
 
 ---
 diff -ruN a/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/index.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/index.ts

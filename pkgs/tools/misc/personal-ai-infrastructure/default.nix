@@ -22,10 +22,10 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     hash = "sha256-PLNWzWnAzd2O4u+0vNxzfL1AAEbEtoovLB1/gk1Fzx4=";
   };
   patches = [
-    ./patches/0001-skip-bun-management-on-nixos.patch
+    ./patches/0001-skip-bun-management-on-nix.patch
     ./patches/0002-add-linux-support-to-pulse.patch
     ./patches/0003-add-pulse-package-json.patch
-    ./patches/0004-nixos-installer-fixes.patch
+    ./patches/0004-nix-installer-fixes.patch
     ./patches/0005-fix-validator-spurious-failures.patch
     ./patches/0006-fix-pulse-path-case.patch
     ./patches/0007-fix-prompt-classifier-slash-prefix.patch
@@ -81,9 +81,11 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     set -euo pipefail
     export PATH="@bun@/bin:@nodejs@/bin:@git@/bin:@curl@/bin:@jq@/bin:@claude-code@/bin:$PATH"
 
-    # Deterministic NixOS marker. The upstream installer's NixOS-conditional
-    # branches read this — replaces the broken `process.env.NIX_STORE` runtime
-    # check (NIX_STORE is build-time-only and is empty in user-shell runtime).
+    # Deterministic Nix-install marker. The patched upstream installer's
+    # Nix-conditional branches (any Nix-built install — NixOS, Nix-on-Ubuntu,
+    # Nix-on-macOS) read this. Replaces the broken `process.env.NIX_STORE`
+    # runtime check (NIX_STORE is build-time-only, empty in user-shell
+    # runtime).
     export PAI_NIX_INSTALL=1
 
     # Version string the patched wizard uses to write `.pai-version` at the

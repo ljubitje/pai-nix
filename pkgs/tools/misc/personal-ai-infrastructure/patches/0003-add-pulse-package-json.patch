@@ -1,13 +1,16 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: pai-nix <pai-nix@localhost>
 Date: Fri, 2 May 2026 13:00:00 +0200
-Subject: [PATCH 3/4] Add package.json to PULSE for dependency resolution
+Subject: [PATCH 3/N] Add package.json to PULSE for dependency resolution
 
 Pulse daemon imports six external npm packages (smol-toml, grammy,
 @anthropic-ai/claude-agent-sdk, minisearch, jose, yaml) but ships
-without a package.json. On NixOS the wrapper runs `bun install` in
-the PULSE directory during installation; without a manifest bun
-cannot resolve the dependencies and Pulse crashes on start.
+without a package.json. Under any Nix install (NixOS, Nix-on-Ubuntu,
+Nix-on-macOS) the pai-nix wrapper runs `bun install` in the PULSE
+directory during installation; without a manifest bun cannot resolve
+the dependencies and Pulse crashes on start. Patch 0019 later moves
+the same `bun install` step into the upstream installer's
+installPulse() so non-Nix installs benefit too.
 
 ---
  Releases/v5.0.0/.claude/PAI/PULSE/package.json | 14 ++++++++++++++

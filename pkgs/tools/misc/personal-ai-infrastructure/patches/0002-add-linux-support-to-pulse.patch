@@ -1,3 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Fri, 2 May 2026 07:00:00 +0200
+Subject: [PATCH 2/N] Add Linux support to PULSE manage.sh
+
+Upstream `manage.sh` ships macOS-only — every action (start/stop/
+install/uninstall) drives launchctl directly with no platform
+detection. On any non-Darwin host the launchctl invocations fail
+silently (or noisily, depending on whether the binary even exists)
+and Pulse never binds :31337. The validator then reports "Pulse not
+reachable" and the user sees voice notifications never fire.
+
+Fix — add IS_MACOS detection, a start_direct() helper that backgrounds
+`bun run pulse.ts` via nohup, and a stop_direct() helper that uses
+the PID file (with a pkill fallback for orphans). Gate every macOS-
+specific launchctl call on $IS_MACOS, with else branches that route
+through start_direct/stop_direct on Linux.
+
+This patch is the foundation for first-Pulse-bring-up on any Linux
+distro — NixOS, Ubuntu, Arch, Alpine, etc. It does NOT add auto-start
+on login, restart on crash, or reboot persistence; those land in
+patch 0021 via a systemd user unit (with start_direct as the
+systemd-less fallback).
+
+Co-existence: this is the original platform-gating layer for
+manage.sh. Patch 0021 builds on it (adds IS_SYSTEMD detection and
+elif branches); patches 0004 and 0019 mention manage.sh in their
+headers but only modify PAI-Install/* files, so no diff overlap.
+
+---
 --- a/Releases/v5.0.0/.claude/PAI/PULSE/manage.sh	2026-05-02 06:56:40.424889141 +0200
 +++ b/Releases/v5.0.0/.claude/PAI/PULSE/manage.sh	2026-05-02 07:00:44.427951210 +0200
 @@ -8,6 +8,13 @@

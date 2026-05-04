@@ -56,11 +56,11 @@ Each patch is a numbered, additive `.patch` file with a multi-paragraph header e
 
 | #     | Patch                                       | Upstream                                                                                                  |
 | ----- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| 0001  | Skip bun management on NixOS                | (NixOS-specific, no upstream issue)                                                                       |
-| 0002  | Linux support for Pulse daemon              | (NixOS-specific)                                                                                          |
-| 0003  | Pulse `package.json` for dependency resolution | (NixOS-specific)                                                                                       |
-| 0004  | NixOS installer fixes                       | (NixOS-specific)                                                                                          |
-| 0005  | Validator spurious failures                 | (NixOS-specific — `process.env.NIX_STORE` is build-time-only)                                             |
+| 0001  | Skip bun management on Nix-built installs   | (Nix-specific, applies to any Nix install — NixOS, Nix-on-Ubuntu, Nix-on-macOS)                          |
+| 0002  | Linux support for Pulse daemon              | (Linux-specific, all distros)                                                                             |
+| 0003  | Pulse `package.json` for dependency resolution | (Nix-specific bring-up; patch 0019 extends benefit to upstream installer)                              |
+| 0004  | Nix installer fixes (any Nix-built install) | (Nix-specific, applies to any Nix install)                                                                |
+| 0005  | Fix Nix-install runtime gate (NIX_STORE → PAI_NIX_INSTALL) | (Nix-specific — `process.env.NIX_STORE` is build-time-only)                            |
 | 0006  | Pulse case-sensitive path construction      | [#1146](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1146) (Pulse subset)         |
 | 0007  | Prompt classifier slash-prefix              | [#1158](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1158)                         |
 | 0008  | Installer `paiDir` misnaming                | [#1121](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1121)                         |

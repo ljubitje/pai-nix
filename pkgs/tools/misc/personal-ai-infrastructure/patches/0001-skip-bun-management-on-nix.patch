@@ -1,8 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Fri, 2 May 2026 06:55:00 +0200
+Subject: [PATCH 1/N] Skip bun management when PAI is installed via Nix
+
+The upstream installer's "make bun reachable for non-interactive
+subprocess spawns" block (install.sh:146+) does two things — (a)
+symlinks $HOME/.bun/bin/bun into a system-wide path (/usr/local/bin
+or /opt/homebrew/bin), and (b) appends `export PATH="$HOME/.bun/bin:
+$PATH"` to four shell rc files (.zshenv, .zprofile, .zshrc,
+.bash_profile). Both target the upstream curl-installer flow where
+bun is unmanaged.
+
+Under any Nix install of PAI (NixOS, Nix-on-Ubuntu, Nix-on-macOS,
+etc.), bun is supplied by the Nix store, the pai-nix wrapper injects
+it into PATH explicitly, and there is no $HOME/.bun/bin/bun to
+symlink. The upstream block then no-ops the symlink loop (no source
+bun → loop body doesn't fire) but still pollutes shell rc files with
+a stale export. Either way the work is wasted; the rc-file pollution
+is unwelcome.
+
+A second hunk in the same file (the post-install handoff at line 258+)
+is also gated: under Nix the wrapper handles the launch, so the
+interactive `exec zsh -i -c 'source ~/.zshrc && pai'` would block the
+wrapper from continuing.
+
+Fix — gate both blocks on a Nix-install marker. The companion
+`export PAI_NIX_INSTALL=1` lives in default.nix's wrapper script.
+
+Note: the initial version of this patch gated on `${NIX_STORE:-}`,
+which is a build-time-only env var and therefore always empty at
+install runtime. Patch 0005 corrects that by replacing every
+NIX_STORE reference with the explicit PAI_NIX_INSTALL marker that
+the wrapper exports. The intermediate state (after 0001 but before
+0005) has the broken NIX_STORE gate; only the final post-0005 state
+is correct.
+
+Co-existence: patches 0004 and 0005 layer additional Nix-aware fixes
+onto the same install.sh. Line ranges are non-overlapping with this
+patch's hunks (this patch: lines 146..205 + 258..272).
+
+---
 --- a/Releases/v5.0.0/.claude/install.sh	2026-05-02 06:54:34.144383659 +0200
 +++ b/Releases/v5.0.0/.claude/install.sh	2026-05-02 06:55:16.484549026 +0200
 @@ -146,18 +146,10 @@
  fi
- 
+
  # ─── Make bun reachable for non-interactive subprocess spawns ──────
 -# Critical for Claude Code hooks (`#!/usr/bin/env bun` shebang). The bun
 -# curl installer puts bun at ~/.bun/bin/bun and adds an export line to
@@ -25,7 +67,7 @@
      if [ -d "$target" ] && [ -w "$target" ] && [ ! -e "$target/bun" ]; then
 @@ -175,12 +167,8 @@
    fi
- 
+
    # Persist PATH to shell config files (idempotent).
 -  # .zshenv is sourced for ALL zsh invocations including non-interactive subshells.
 -  # .zprofile is sourced for login shells. .zshrc for interactive.
