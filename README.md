@@ -47,7 +47,7 @@ nix run git+https://codeberg.org/ljubitje/pai-nix -- --force-install
 ## What's inside
 
 - **PAI v5.0.0** — fetched as a fixed source tarball at build time (Daniel Miessler's upstream).
-- **17 patches** layered on top, each addressing a specific upstream bug or NixOS-specific incompatibility.
+- **21 patches** layered on top, each addressing a specific upstream bug, a Nix-install integration concern, or a Linux-specific incompatibility.
 - **A wrapper script** that runs the upstream installer in user space without touching `/etc`, `~/.zshrc`, or `~/.bashrc`. PATH inherits Nix-store binaries (bun, nodejs, git, curl, jq, claude-code).
 
 ### Patches
@@ -73,6 +73,9 @@ Each patch is a numbered, additive `.patch` file with a multi-paragraph header e
 | 0015  | Root `package.json` for runtime deps        | [#1139](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1139)                         |
 | 0016  | `PAI_STATE.json` producer for statusline    | [#1132](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1132)                         |
 | 0017  | Migrate observability to `/interview` TELOS schema | [#1153](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1153)                  |
+| 0018  | Emit step_skip event for every Telegram skip path | (upstream — TBD issue)                                                                          |
+| 0019  | Install Pulse deps before invoking manage.sh | (upstream — TBD issue, applies to every platform)                                                    |
+| 0020  | Clear `.pai-installing` at install_complete moment | (Nix-only — `.pai-installing` is a pai-nix wrapper concept; gated on `PAI_NIX_INSTALL=1`)      |
 | 0021  | systemd user unit for Pulse on Linux (launchd parity) | (Linux-specific, applicable to all distros with systemd-user)                                  |
 
 ---
@@ -89,7 +92,7 @@ Each patch is a numbered, additive `.patch` file with a multi-paragraph header e
 
 ## Status
 
-**Working.** `nix build` exit 0, all 17 patches apply cleanly, Pulse daemon reaches `localhost:31337/healthz`, dashboard renders at `/`, `/agents`, `/work`, `/telos`, `/health`, `/security`. Validator reports zero false-failures on a clean install.
+**Working.** `nix build` exit 0, all 21 patches apply cleanly, Pulse daemon reaches `localhost:31337/healthz`, dashboard renders at `/`, `/agents`, `/work`, `/telos`, `/health`, `/security`. Validator reports zero false-failures on a clean install. On Linux + systemd, Pulse auto-starts on login and restarts on crash via the systemd user unit installed by patch 0021 (parity with the macOS launchd plist).
 
 **Caveats:**
 
