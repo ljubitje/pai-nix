@@ -42,6 +42,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0018-fix-telegram-step-skip-event.patch
     ./patches/0019-fix-pulse-deps-before-manage-install.patch
     ./patches/0020-clear-marker-at-install-complete.patch
+    ./patches/0021-add-systemd-user-unit-for-pulse-on-linux.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];

@@ -73,6 +73,7 @@ Each patch is a numbered, additive `.patch` file with a multi-paragraph header e
 | 0015  | Root `package.json` for runtime deps        | [#1139](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1139)                         |
 | 0016  | `PAI_STATE.json` producer for statusline    | [#1132](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1132)                         |
 | 0017  | Migrate observability to `/interview` TELOS schema | [#1153](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1153)                  |
+| 0021  | systemd user unit for Pulse on Linux (launchd parity) | (Linux-specific, applicable to all distros with systemd-user)                                  |
 
 ---
 

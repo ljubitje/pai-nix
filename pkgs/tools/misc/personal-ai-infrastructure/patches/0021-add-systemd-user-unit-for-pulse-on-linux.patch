@@ -1,0 +1,286 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Mon, 4 May 2026 17:15:00 +0200
+Subject: [PATCH 21/21] Add systemd user unit for Pulse on Linux (launchd parity)
+
+Upstream: applicable to all Linux installs of upstream PAI v5.0.0+ —
+the gap is platform-shape, not Nix-specific. macOS path is unchanged.
+
+Patch 0002 added Linux support to manage.sh by introducing start_direct
+(nohup bun) and stop_direct (PID-file kill). That brings Pulse up on a
+fresh `pai --force-install`, but only until the first crash or graceful
+shutdown — there is no auto-start on user login, no restart on crash,
+and no persistence across reboots. macOS gets all three via
+com.pai.pulse.plist `RunAtLoad=true` + `KeepAlive=true` + launchd's
+session lifecycle. Linux had nothing equivalent, so manage.sh
+intentionally documented restart-via-manage.sh in the install wizard
+copy (patch 0004). This patch closes the gap on every distro that ships
+systemd-user — i.e., the overwhelming majority of desktop/server Linux
+installs in 2026.
+
+Reproduction (any systemd-user Linux):
+
+  $ ./result/bin/pai --force-install
+  ✓ PAI Pulse installed and verified on port 31337
+  $ bash ~/.claude/PAI/PULSE/manage.sh stop
+  PAI Pulse stopped
+  # Log out, log back in. Pulse is gone — no auto-start.
+  $ curl -sS http://localhost:31337/health
+  curl: (7) Failed to connect to localhost port 31337
+  # Same outcome after reboot. Same outcome if pulse.ts crashes
+  # (no respawn — start_direct's `nohup &` is fire-and-forget).
+
+Fix — install a systemd user unit equivalent to com.pai.pulse.plist:
+
+  1. Detect systemd-user availability — `$XDG_RUNTIME_DIR/systemd`
+     directory exists AND systemctl is in PATH. systemctl alone is
+     insufficient: it ships in PATH inside chroots and minimal
+     container images where the per-user manager is not running.
+     Distros without systemd-user (Alpine, raw containers, NixOS
+     without systemd-as-PID-1) fall through to the existing
+     start_direct path. macOS skips this branch entirely via
+     $IS_MACOS.
+
+  2. write_unit() writes ~/.config/systemd/user/pai-pulse.service
+     with:
+       - ExecStart=$BUN_PATH run pulse.ts (absolute bun, same
+         resolution chain manage.sh already established).
+       - Restart=always, RestartSec=30 — mirrors launchd
+         KeepAlive=true + ThrottleInterval=30.
+       - ConditionPathExists=$PULSE_DIR/pulse.ts — fail-soft if
+         Pulse isn't installed yet (rare race during first install,
+         but cheap to guard).
+       - Environment="PATH=$PATH" — bake the install-time PATH so
+         claude/bun/jq/curl/git resolve regardless of how
+         systemd-user inherits its session env. Whoever ran
+         `manage.sh install` (the pai installer wrapper, the user's
+         shell, or a packaging tool) already has a working PATH;
+         capturing it gives the daemon the same toolchain its
+         install context had. Bun's which("claude") otherwise
+         falls back to ~/.local/bin/claude, which doesn't exist
+         on most Linux installs and never on NixOS (claude lives
+         under /nix/store via ~/.nix-profile/bin), so an explicit
+         PATH is required for github-work and inference checks to
+         function from the daemon. Re-running `manage.sh install`
+         after a PATH change re-bakes the unit.
+       - StandardOutput/StandardError=append:.../logs/pulse-*.log
+         — preserves continuity with the launchd plist's
+         file-based logging. Useful for `tail -f` debug without
+         needing journalctl filters.
+       - WantedBy=default.target — start on user login.
+
+  3. Wire the systemd path into `start)`, `stop)`, `status)`,
+     `install)`, and `uninstall)`. Each action gates on
+     `$IS_SYSTEMD && [ -f "$SERVICE_DST" ]` before dispatching to
+     systemctl, falling back to start_direct/stop_direct/PID-file
+     logic if the unit isn't present yet (e.g. `manage.sh start`
+     before `install`).
+
+Co-existence:
+
+  Patch 0002 added IS_MACOS detection, start_direct/stop_direct
+  helpers, and gated `case start)` + `case stop)` on $IS_MACOS. This
+  patch extends those gates with an `elif $IS_SYSTEMD` branch and
+  adds write_unit alongside the direct helpers. Hunks live in
+  adjacent line ranges but do not overlap with 0002's introduced
+  lines. Patches 0004 and 0019 mention manage.sh in their headers
+  but only modify PAI-Install/* files — no diff overlap.
+
+  macOS path: every new branch is `elif $IS_SYSTEMD ...`. On macOS
+  $IS_MACOS=true short-circuits the if-chain at the first branch,
+  same as before this patch. The only structural change in the
+  macOS branch is that stop_direct now lives inside the IS_MACOS
+  block in `stop)` and `uninstall)` (previously called
+  unconditionally after the if-fi). Net macOS behavior identical
+  pre/post — same launchctl calls, same stop_direct invocation.
+
+Verification:
+
+  - `nix build` exit 0; all patches apply cleanly.
+  - `bash -n manage.sh` returns 0 (syntax valid).
+  - On NixOS post-install:
+      cat ~/.config/systemd/user/pai-pulse.service
+        → expected unit content; ExecStart contains absolute
+          ~/.bun/bin/bun OR /nix/store/.../bin/bun depending on
+          environment; Environment line contains PATH with the
+          Nix store paths from the wrapper.
+      systemctl --user is-active pai-pulse.service → active
+      kill -9 $(pgrep -f bun.*pulse.ts); sleep 35
+        → systemctl --user is-active → active (Restart=always
+          fired after RestartSec=30).
+      logout / login: pgrep -f bun.*pulse.ts → returns PID
+        (auto-start on login fired).
+      bash manage.sh stop → systemctl --user is-active → inactive
+        (clean stop, no respawn).
+      bash manage.sh uninstall → unit file removed, daemon-reload
+        run, daemon stopped.
+  - macOS regression check (manual via patched file inspection):
+    `start)` and `install)` macOS branches structurally unchanged;
+    `stop)` and `uninstall)` macOS branches gain stop_direct call
+    inside the `if $IS_MACOS` block (matched move from below the
+    if-fi). No semantic change to macOS execution.
+
+Files / hunks:
+
+  PAI/PULSE/manage.sh
+    @@ -9,6 +9,8 @@        + SERVICE_NAME, SERVICE_DST
+    @@ -16,6 +18,19 @@      + IS_SYSTEMD detection
+    @@ -58,6 +73,40 @@      + write_unit() helper
+    @@ -67,6 +116,8 @@      + start) elif systemd branch
+    @@ -76,8 +127,12 @@     ~ stop) regroup + elif systemd branch
+    @@ -87,7 +142,15 @@     ~ status) prepend systemd reporting
+    @@ -123,6 +186,8 @@     + install) cleanup elif systemd
+    @@ -132,6 +197,13 @@     + install) start elif systemd
+    @@ -157,8 +229,14 @@     ~ uninstall) regroup + elif systemd
+
+---
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/manage.sh
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/manage.sh
+@@ -9,6 +9,8 @@
+ PID_FILE="$PULSE_DIR/state/pulse.pid"
+ STATE_FILE="$PULSE_DIR/state/state.json"
+ LOG_DIR="$PULSE_DIR/logs"
++SERVICE_NAME="pai-pulse"
++SERVICE_DST="$HOME/.config/systemd/user/${SERVICE_NAME}.service"
+
+ # Detect platform: macOS uses launchctl, Linux uses direct process management.
+ IS_MACOS=false
+@@ -16,6 +18,19 @@
+   IS_MACOS=true
+ fi
+
++# Detect systemd-user availability for Linux daemon management. Linux distros
++# without systemd (Alpine, some containers, NixOS without systemd-as-PID-1) fall
++# back to start_direct's nohup approach. The check requires both the systemctl
++# binary and the runtime-dir socket — bare systemctl presence isn't sufficient
++# (systemctl ships in PATH inside chroots and minimal images, but the per-user
++# manager isn't actually running there).
++IS_SYSTEMD=false
++if ! $IS_MACOS \
++   && [ -d "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/systemd" ] \
++   && command -v systemctl >/dev/null 2>&1; then
++  IS_SYSTEMD=true
++fi
++
+ # Resolve bun's actual location for the launchd job. The public plist
+ # template ships with `__BUN_PATH__` so the job works for both brew users
+ # (/opt/homebrew/bin/bun) and curl-installer users (~/.bun/bin/bun).
+@@ -58,6 +73,40 @@
+   fi
+ }
+
++# ─── Helper: write systemd user unit (Linux + systemd) ────
++# Bake the install-time PATH into the unit so claude/bun/jq/curl/git resolve
++# regardless of how the user's systemd-user inherits its environment. Whoever
++# ran `manage.sh install` (the pai installer wrapper, the user's shell, or a
++# packaging tool) has already exported a functional PATH; capturing it here
++# gives the daemon the same toolchain its install context had. Re-running
++# `manage.sh install` after a PATH change re-bakes the unit. RestartSec=30
++# matches launchd's ThrottleInterval=30 in com.pai.pulse.plist for cross-
++# platform parity.
++write_unit() {
++  mkdir -p "$(dirname "$SERVICE_DST")"
++  cat > "$SERVICE_DST" <<EOF
++[Unit]
++Description=PAI Pulse — local runtime for PAI services
++After=network.target
++ConditionPathExists=$PULSE_DIR/pulse.ts
++
++[Service]
++Type=simple
++WorkingDirectory=$PULSE_DIR
++ExecStart=$BUN_PATH run pulse.ts
++Restart=always
++RestartSec=30
++StandardOutput=append:$LOG_DIR/pulse-stdout.log
++StandardError=append:$LOG_DIR/pulse-stderr.log
++Environment=HOME=$HOME
++Environment="PATH=$PATH"
++
++[Install]
++WantedBy=default.target
++EOF
++  systemctl --user daemon-reload
++}
++
+ case "$1" in
+   start)
+     if $IS_MACOS; then
+@@ -67,6 +116,8 @@
+         sed -e "s|__HOME__|$HOME|g" -e "s|__BUN_PATH__|$BUN_PATH|g" "$PLIST_SRC" > "$PLIST_DST"
+       fi
+       launchctl load "$PLIST_DST" 2>/dev/null
++    elif $IS_SYSTEMD && [ -f "$SERVICE_DST" ]; then
++      systemctl --user start "$SERVICE_NAME.service"
+     else
+       start_direct
+     fi
+@@ -76,8 +127,12 @@
+   stop)
+     if $IS_MACOS; then
+       launchctl unload "$PLIST_DST" 2>/dev/null
++      stop_direct
++    elif $IS_SYSTEMD && [ -f "$SERVICE_DST" ]; then
++      systemctl --user stop "$SERVICE_NAME.service" 2>/dev/null || true
++    else
++      stop_direct
+     fi
+-    stop_direct
+     ;;
+
+   restart)
+@@ -87,7 +142,15 @@
+     ;;
+
+   status)
+-    if [ -f "$PID_FILE" ]; then
++    if $IS_SYSTEMD && [ -f "$SERVICE_DST" ]; then
++      if systemctl --user is-active --quiet "$SERVICE_NAME.service"; then
++        PID=$(systemctl --user show -p MainPID --value "$SERVICE_NAME.service")
++        UPTIME=$(ps -p "$PID" -o etime= 2>/dev/null | xargs)
++        echo "PAI Pulse: RUNNING (systemd, PID $PID, uptime $UPTIME)"
++      else
++        echo "PAI Pulse: NOT RUNNING (systemd inactive)"
++      fi
++    elif [ -f "$PID_FILE" ]; then
+       PID=$(cat "$PID_FILE")
+       if ps -p "$PID" > /dev/null 2>&1; then
+         UPTIME=$(ps -p "$PID" -o etime= | xargs)
+@@ -123,6 +186,8 @@
+       if [ -f "$PLIST_DST" ]; then
+         launchctl unload "$PLIST_DST" 2>/dev/null || true
+       fi
++    elif $IS_SYSTEMD && [ -f "$SERVICE_DST" ]; then
++      systemctl --user stop "$SERVICE_NAME.service" 2>/dev/null || true
+     fi
+     pkill -9 -f "bun.*pulse.ts" 2>/dev/null || true
+     sleep 1
+@@ -132,6 +197,13 @@
+       # no-op on plists that already have literal paths.
+       sed -e "s|__HOME__|$HOME|g" -e "s|__BUN_PATH__|$BUN_PATH|g" "$PLIST_SRC" > "$PLIST_DST"
+       launchctl load "$PLIST_DST"
++    elif $IS_SYSTEMD; then
++      # Linux + systemd: parity with launchd (auto-start on login, restart on
++      # crash, persists across reboots). Without this, Pulse on Linux runs
++      # only until first crash or graceful shutdown — see start_direct() above
++      # for the non-systemd fallback.
++      write_unit
++      systemctl --user enable --now "$SERVICE_NAME.service"
+     else
+       start_direct
+     fi
+@@ -157,8 +229,14 @@
+     if $IS_MACOS; then
+       launchctl unload "$PLIST_DST" 2>/dev/null
+       rm -f "$PLIST_DST"
++      stop_direct
++    elif $IS_SYSTEMD && [ -f "$SERVICE_DST" ]; then
++      systemctl --user disable --now "$SERVICE_NAME.service" 2>/dev/null || true
++      rm -f "$SERVICE_DST"
++      systemctl --user daemon-reload
++    else
++      stop_direct
+     fi
+-    stop_direct
+     echo "PAI Pulse uninstalled"
+     ;;
