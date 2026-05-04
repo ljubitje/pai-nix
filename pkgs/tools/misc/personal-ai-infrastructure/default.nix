@@ -41,6 +41,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0017-fix-observability-telos-schema.patch
     ./patches/0018-fix-telegram-step-skip-event.patch
     ./patches/0019-fix-pulse-deps-before-manage-install.patch
+    ./patches/0020-clear-marker-at-install-complete.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];
@@ -83,6 +84,13 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     # branches read this — replaces the broken `process.env.NIX_STORE` runtime
     # check (NIX_STORE is build-time-only and is empty in user-shell runtime).
     export PAI_NIX_INSTALL=1
+
+    # Version string the patched wizard uses to write `.pai-version` at the
+    # install_complete broadcast (patch 0020). Cleanup happens at the
+    # logical install-complete moment instead of waiting for the user to
+    # close the GUI window. The wrapper's post-install cleanup below stays
+    # as an idempotent fallback.
+    export PAI_NIX_VERSION="@version@"
 
     PAI_SHARE="@out@/share/personal-ai-infrastructure/.claude"
     PAI_MARKER="$HOME/.claude/.pai-version"

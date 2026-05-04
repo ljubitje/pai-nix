@@ -1,0 +1,163 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Mon, 4 May 2026 09:00:00 +0200
+Subject: [PATCH 20/20] Clear .pai-installing at logical install-complete moment
+
+Nix-only patch. The `.pai-installing` and `.pai-version` markers are pai-nix
+concepts (introduced by pkgs/tools/misc/personal-ai-infrastructure/default.nix);
+upstream PAI does not know about them, and this patch is conditionally inert
+on non-Nix installs (gated on PAI_NIX_INSTALL=1).
+
+PROBLEM
+
+The wrapper script in default.nix manages two markers:
+
+  - $HOME/.claude/.pai-installing  — created at the start of pai_install(),
+                                     removed only on confirmed-success exit
+                                     of `bash install.sh`. Its presence on
+                                     the next launch of `pai` is treated as
+                                     "previous install was interrupted" and
+                                     blocks the launch with a force-install
+                                     prompt.
+  - $HOME/.claude/.pai-version     — written on confirmed-success exit of
+                                     install.sh; absence triggers fresh
+                                     install, mismatch triggers upgrade.
+
+Cleanup of both is gated on `bash install.sh` exiting 0. install.sh blocks
+on `bun run main.ts --mode gui`, which blocks on the Electron child
+(electron/main.js), which exits only on `window-all-closed`. There is no
+programmatic close on success — the wizard frontend explicitly chose
+"Don't auto-close — let the user read the summary and close manually"
+(public/app.js, install_complete handler).
+
+So between the moment the wizard finishes its install steps (broadcasting
+`install_complete` over its WebSocket) and the moment the user closes the
+GUI window, the `.pai-installing` marker is on disk while no install is
+actually in progress. A second `pai` invocation in another terminal during
+that window sees the marker and prints
+
+  ⚠  A previous PAI install was interrupted.
+     Run 'pai --force-install' to retry, or 'pai --skip-install' to launch
+     anyway.
+
+— a false positive that locks the user out of `pai` until they either
+close the original GUI window or invoke --force-install (which would
+re-run the entire install over a tree that is already fine).
+
+REPRODUCTION
+
+  $ ./result/bin/pai          # in terminal A
+  ... wizard runs through all steps, GUI shows "🎉 Install complete" ...
+  ... user does NOT close the window ...
+
+  $ ./result/bin/pai          # in terminal B
+  ⚠  A previous PAI install was interrupted.
+     Run 'pai --force-install' to retry, or 'pai --skip-install' to launch
+     anyway.
+
+  $ ls -la ~/.claude/.pai-installing ~/.claude/.pai-version
+  -rw-r--r-- 1 user users 0 May  3 21:10 ~/.claude/.pai-installing
+  ls: cannot access /home/user/.claude/.pai-version: No such file
+
+  ... user closes the GUI window in terminal A ...
+
+  $ ls -la ~/.claude/.pai-installing ~/.claude/.pai-version
+  ls: cannot access /home/user/.claude/.pai-installing: No such file
+  -rw-r--r-- 1 user users 6 May  3 21:11 ~/.claude/.pai-version
+
+The cleanup happens — just deferred behind a human-controlled event
+(window-close) the wrapper has no visibility into.
+
+FIX
+
+Decouple marker cleanup from process exit. The wizard already knows
+the precise moment install succeeded — it is the line that broadcasts
+`install_complete` to the WebSocket. Hook the marker management at that
+exact point: clear `.pai-installing`, write `.pai-version`. Both writes
+are best-effort (logged to stderr on failure, not surfaced to the user)
+because the wrapper still runs the same cleanup on `install.sh` exit and
+is the authoritative fallback.
+
+Scope is gated on PAI_NIX_INSTALL=1 (existing wrapper export) AND on
+PAI_NIX_VERSION (new wrapper export added by the same commit that adds
+this patch). Non-Nix users have neither variable set; the if-block is
+inert. The Electron lifecycle, the success-summary UI, and every CLI
+flow are untouched.
+
+RESPONSIBILITY OVERLAP — DELIBERATE
+
+After this patch, both the wizard and the wrapper write the version
+marker and clear the in-progress marker on the success path. This is
+intentional, not a bug:
+
+  1. The wizard runs first (during install_complete broadcast). It is
+     the single source of truth for "install logically succeeded".
+  2. The wrapper runs second (after install.sh returns). Its writes are
+     idempotent (`echo > .pai-version` overwrites with the same value;
+     `rm -f .pai-installing` is a no-op on an already-removed file).
+  3. The wrapper acts as a safety net: if a future upstream change
+     moves or splits the install_complete event, or if the wizard
+     crashes between the broadcast and process exit, the wrapper still
+     leaves the user in a clean state.
+
+The marker semantics in default.nix's prose comment ("preserved on any
+non-clean exit") shift slightly: previously the wrapper was the sole
+arbiter; now the wizard arbiters first and the wrapper double-checks.
+The user-visible invariant — "marker absent + version written = good" —
+is unchanged.
+
+Files touched (this patch):
+
+  - PAI/PAI-Install/web/routes.ts (1 hunk, +21 lines)
+
+Companion changes (in default.nix, not in this patch):
+
+  - Export PAI_NIX_VERSION="@version@" alongside PAI_NIX_INSTALL=1.
+  - Append this file to the `patches` list.
+
+VERIFICATION
+
+  $ ./result/bin/pai          # terminal A
+  ... wizard runs to install_complete ...
+
+  $ ls ~/.claude/.pai-installing 2>&1 ; cat ~/.claude/.pai-version 2>&1
+  ls: cannot access ...: No such file
+  5.0.0
+
+  $ ./result/bin/pai          # terminal B (window in A still open)
+  ... claude-code launches normally; no "interrupted" warning ...
+---
+ .../v5.0.0/.claude/PAI/PAI-Install/web/routes.ts | 22 +++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/web/routes.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/web/routes.ts
+@@ -260,6 +260,28 @@
+     broadcast({ type: "step_update", step: "validation", status: "completed" });
+
+     const summary = generateSummary(installState);
++
++    // pai-nix lifecycle hook (NixOS-only): the wrapper's `.pai-installing`
++    // marker is cleared by `pai` only after `bash install.sh` returns,
++    // which blocks on `bun run --mode gui` → Electron `window-all-closed`.
++    // Between "install done" and "user closes the GUI window", a second
++    // `pai` invocation in another terminal sees a stale marker and refuses
++    // to launch. Clear it here, at the logical install-complete moment.
++    // The wrapper's own post-`install.sh` cleanup remains as a fallback.
++    if (process.env.PAI_NIX_INSTALL === "1" && process.env.PAI_NIX_VERSION) {
++      const home = process.env.HOME;
++      if (home) {
++        try {
++          const { rm, writeFile } = await import("node:fs/promises");
++          const { join } = await import("node:path");
++          await rm(join(home, ".claude/.pai-installing"), { force: true });
++          await writeFile(join(home, ".claude/.pai-version"), process.env.PAI_NIX_VERSION);
++        } catch (markerErr: any) {
++          console.error("[pai-nix] marker cleanup non-fatal:", markerErr?.message || markerErr);
++        }
++      }
++    }
++
+     broadcast({ type: "install_complete", success: true, summary });
+
+     clearState();
