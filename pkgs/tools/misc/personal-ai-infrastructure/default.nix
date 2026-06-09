@@ -44,6 +44,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0020-clear-marker-at-install-complete.patch
     ./patches/0021-add-systemd-user-unit-for-pulse-on-linux.patch
     ./patches/0022-remove-cloudflare-kv-observability-target.patch
+    ./patches/0023-kvsync-detach-boundary-push.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];

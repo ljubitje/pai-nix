@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Tue, 9 Jun 2026 18:18:30 +0200
+Subject: [PATCH 23/23] Perf: run KVSync boundary push detached (stop blocking
+ session close)
+
+Upstream issue: (pai-nix — performance; no upstream issue.)
+
+KVSync runs at SessionStart and SessionEnd. It awaits a network push
+(pushStateToTargets + pushEventsToTargets, each with 5-8s timeouts in
+observability-transport) before the hook process exits. Because the
+session waits for its boundary hooks, that round-trip is added
+directly to session start and, more noticeably, session CLOSE latency
+— on a slow or unreachable target the user waits multiple seconds for
+the session to close while the dashboard sync drains its timeout.
+
+This decouples the push from the session lifecycle by performing it in
+a DETACHED child process:
+
+  - Parent mode (the hook invocation): reads stdin (hook protocol),
+    spawns a detached child re-running this same file with
+    KVSYNC_DETACHED=1, calls child.unref(), prints { continue: true },
+    and exits immediately. The session no longer waits on the network.
+  - Child mode (KVSYNC_DETACHED=1): imports observability-transport and
+    performs the actual push, outliving the parent (detached + setsid,
+    stdio ignored) so the work completes in the background.
+
+NOT a functional removal. The push still happens on every boundary;
+local-target sync (the Pulse dashboard on localhost:31337) is fully
+preserved — only the blocking wait is removed. This is deliberately
+scoped to KVSync alone; UpdateCounts.hook.ts has the same
+block-on-network-at-SessionEnd shape (Anthropic usage/cost API,
+3-5s timeouts) and is a candidate for an equivalent follow-up patch,
+kept separate for clean blame/rollback.
+
+Doc comment updated to drop the stale "Cloudflare KV"-specific wording
+(post-0023 the hook is generic over observability targets, and after
+patch 0022 the shipped default has no cloudflare-kv target at all).
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/hooks/KVSync.hook.ts   :1-23 (whole body)
+
+Total: 1 file, 1 hunk.
+
+Verification: `bun build --no-bundle` parses the rewritten file;
+invoking the hook with a SessionEnd payload returns in ~60ms (bun
+startup only, no network wait) versus the prior await-bound time; a
+detached child process is spawned and performs the push independently.
+Hunk generated via `diff -u` against the upstream v5.0.0 source tree.
+---
+ Releases/v5.0.0/.claude/hooks/KVSync.hook.ts | 42 ++++++++++++++------
+ 1 file changed, 30 insertions(+), 12 deletions(-)
+
+diff --git a/Releases/v5.0.0/.claude/hooks/KVSync.hook.ts b/Releases/v5.0.0/.claude/hooks/KVSync.hook.ts
+--- a/Releases/v5.0.0/.claude/hooks/KVSync.hook.ts
++++ b/Releases/v5.0.0/.claude/hooks/KVSync.hook.ts
+@@ -1,23 +1,41 @@
+ #!/usr/bin/env bun
+ /**
+- * KVSync.hook.ts — Push work.json to Cloudflare KV at session boundaries
++ * KVSync.hook.ts — Push work.json to observability targets at session boundaries
+  *
+  * TRIGGER: SessionStart, SessionEnd
+  *
+- * Ensures KV always has fresh work.json data regardless of whether ISASync
+- * fires during the session. Prevents the recurring "activity page empty"
+- * issue caused by KV going stale between sessions.
++ * Ensures targets always have fresh work.json data regardless of whether
++ * ISASync fires during the session. Prevents the recurring "activity page
++ * empty" issue caused by state going stale between sessions.
++ *
++ * The push runs in a DETACHED child process so the network round-trip
++ * (5-8s timeouts in observability-transport) never blocks session start or
++ * close. The parent returns immediately; the detached child outlives it and
++ * completes the push in the background. Local-target sync (e.g. the Pulse
++ * dashboard on localhost) is fully preserved — only the blocking wait is gone.
+  */
+ 
+ import { readFileSync } from 'fs';
+-import { pushStateToTargets, pushEventsToTargets } from './lib/observability-transport';
++import { spawn } from 'child_process';
++
++// Child mode: perform the actual push, decoupled from the session lifecycle.
++if (process.env.KVSYNC_DETACHED === '1') {
++  const { pushStateToTargets, pushEventsToTargets } = await import('./lib/observability-transport');
++  await Promise.all([pushStateToTargets(), pushEventsToTargets()])
++    .catch((err) => console.error(`[KVSync] Fatal: ${err instanceof Error ? err.message : String(err)}`));
++  process.exit(0);
++}
+ 
+-// Read stdin (required by hook protocol) but we don't need the input
++// Parent mode: read stdin (hook protocol), spawn the detached pusher, return
++// immediately so the session never waits on the network round-trip.
+ try { readFileSync(0, 'utf-8'); } catch {}
+ 
+-Promise.all([pushStateToTargets(), pushEventsToTargets()])
+-  .catch((err) => console.error(`[KVSync] Fatal: ${err.message}`))
+-  .finally(() => {
+-    console.log(JSON.stringify({ continue: true }));
+-    process.exit(0);
+-  });
++const child = spawn(process.execPath, [import.meta.path], {
++  detached: true,
++  stdio: 'ignore',
++  env: { ...process.env, KVSYNC_DETACHED: '1' },
++});
++child.unref();
++
++console.log(JSON.stringify({ continue: true }));
++process.exit(0);
