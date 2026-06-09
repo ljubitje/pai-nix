@@ -1,0 +1,78 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Tue, 9 Jun 2026 18:05:12 +0200
+Subject: [PATCH 22/22] Privacy: drop cloudflare-kv observability target from
+ default config
+
+Upstream issue: (pai-nix privacy series — no upstream issue; this is a
+deliberate distribution-policy divergence, not a bug fix.)
+
+First patch in the pai-nix privacy series. Upstream v5.0.0 ships an
+observability target of type "cloudflare-kv" (name "production") in
+settings.json by default. That target is the egress sink for four
+hooks that fan out work-state and activity to Cloudflare KV:
+
+  - PromptProcessing.hook.ts   (UserPromptSubmit) — pushes state on
+                                every prompt submission
+  - ToolActivityTracker.hook.ts (PostToolUse)     — tool-activity events
+                                (commands run, file paths)
+  - ISASync.hook.ts            (PostToolUse)       — work.json on every
+                                ISA Write/Edit
+  - KVSync.hook.ts             (SessionStart/End)  — work.json snapshots
+                                at session boundaries
+
+All four route through observability-transport.ts, which sends a
+`sync:work_state` value plus a `sync:events` payload collected from
+MEMORY/OBSERVABILITY/*.jsonl (tool-activity + prompt-processing event
+streams) to the Cloudflare KV REST API. With the default target
+present, the only thing standing between a stock install and
+continuous cloud egress of personal activity data is the absence of
+CF credentials in ~/.claude/.env — i.e. a stock install starts
+leaking the moment a user wires up the dashboard they were nudged to
+configure.
+
+pai-nix distribution stance: local-only by default. Removing the
+cloudflare-kv target leaves the "local" http target
+(http://localhost:31337) in place, so the Pulse dashboard keeps
+working in full — it just reads from the local daemon instead of a
+cloud key-value store. No code is removed: the `cloudflare-kv` branch
+in observability-transport.ts simply has no matching target to act on
+and becomes dormant. A user who explicitly wants cloud sync can
+re-add the target to settings.json; the capability is preserved,
+only the default is flipped from opt-out to opt-in.
+
+This is config-level (settings.json). A follow-up code-level kill
+switch in observability-transport.ts (refuse type "cloudflare-kv"
+unconditionally) is a candidate for a later patch in the series if
+defense-in-depth beyond the shipped default is wanted.
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/settings.json   :1182-1186
+
+Total: 1 file, 1 hunk, 5 deletions.
+
+Verification: modified settings.json re-parses as valid JSON;
+observability.targets contains exactly one entry afterward
+({ type: "http", name: "local", url: "http://localhost:31337" }) and
+zero entries of type "cloudflare-kv". Hunk generated via `diff -u`
+against the upstream v5.0.0 source tree; no hand-counted @@ headers.
+---
+ Releases/v5.0.0/.claude/settings.json | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/Releases/v5.0.0/.claude/settings.json b/Releases/v5.0.0/.claude/settings.json
+--- a/Releases/v5.0.0/.claude/settings.json
++++ b/Releases/v5.0.0/.claude/settings.json
+@@ -1180,11 +1180,6 @@
+   "observability": {
+     "targets": [
+       {
+-        "type": "cloudflare-kv",
+-        "name": "production",
+-        "url": "https://your-dashboard.example.com"
+-      },
+-      {
+         "type": "http",
+         "name": "local",
+         "url": "http://localhost:31337"

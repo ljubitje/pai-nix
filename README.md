@@ -77,6 +77,7 @@ Each patch is a numbered, additive `.patch` file with a multi-paragraph header e
 | 0019  | Install Pulse deps before invoking manage.sh | (upstream — TBD issue, applies to every platform)                                                    |
 | 0020  | Clear `.pai-installing` at install_complete moment | (Nix-only — `.pai-installing` is a pai-nix wrapper concept; gated on `PAI_NIX_INSTALL=1`)      |
 | 0021  | systemd user unit for Pulse on Linux (launchd parity) | (Linux-specific, applicable to all distros with systemd-user)                                  |
+| 0022  | Privacy: drop cloudflare-kv observability target from default config | (pai-nix privacy series — local-only default; no upstream issue)                   |
 
 ---
 
@@ -92,7 +93,7 @@ Each patch is a numbered, additive `.patch` file with a multi-paragraph header e
 
 ## Status
 
-**Working.** `nix build` exit 0, all 21 patches apply cleanly, Pulse daemon reaches `localhost:31337/healthz`, dashboard renders at `/`, `/agents`, `/work`, `/telos`, `/health`, `/security`. Validator reports zero false-failures on a clean install. On Linux + systemd, Pulse auto-starts on login and restarts on crash via the systemd user unit installed by patch 0021 (parity with the macOS launchd plist).
+**Working.** `nix build` exit 0, all 22 patches apply cleanly, Pulse daemon reaches `localhost:31337/healthz`, dashboard renders at `/`, `/agents`, `/work`, `/telos`, `/health`, `/security`. Validator reports zero false-failures on a clean install. On Linux + systemd, Pulse auto-starts on login and restarts on crash via the systemd user unit installed by patch 0021 (parity with the macOS launchd plist).
 
 **Caveats:**
 
