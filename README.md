@@ -79,6 +79,7 @@ Each patch is a numbered, additive `.patch` file with a multi-paragraph header e
 | 0021  | systemd user unit for Pulse on Linux (launchd parity) | (Linux-specific, applicable to all distros with systemd-user)                                  |
 | 0022  | Privacy: drop cloudflare-kv observability target from default config | (pai-nix privacy series — local-only default; no upstream issue)                   |
 | 0023  | Perf: run KVSync boundary push detached (stop blocking session close) | (pai-nix perf — preserves local sync, removes blocking wait; no upstream issue)   |
+| 0024  | Perf: run UpdateCounts refresh detached (stop blocking session close) | (pai-nix perf — preserves counts pre-warm, removes blocking wait; no upstream issue) |
 
 ---
 
@@ -94,7 +95,7 @@ Each patch is a numbered, additive `.patch` file with a multi-paragraph header e
 
 ## Status
 
-**Working.** `nix build` exit 0, all 23 patches apply cleanly, Pulse daemon reaches `localhost:31337/healthz`, dashboard renders at `/`, `/agents`, `/work`, `/telos`, `/health`, `/security`. Validator reports zero false-failures on a clean install. On Linux + systemd, Pulse auto-starts on login and restarts on crash via the systemd user unit installed by patch 0021 (parity with the macOS launchd plist).
+**Working.** `nix build` exit 0, all 24 patches apply cleanly, Pulse daemon reaches `localhost:31337/healthz`, dashboard renders at `/`, `/agents`, `/work`, `/telos`, `/health`, `/security`. Validator reports zero false-failures on a clean install. On Linux + systemd, Pulse auto-starts on login and restarts on crash via the systemd user unit installed by patch 0021 (parity with the macOS launchd plist).
 
 **Caveats:**
 

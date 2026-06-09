@@ -1,0 +1,96 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Tue, 9 Jun 2026 18:30:00 +0200
+Subject: [PATCH 24/24] Perf: run UpdateCounts refresh detached (stop blocking
+ session close)
+
+Upstream issue: (pai-nix — performance; no upstream issue.)
+
+Companion to patch 0023. UpdateCounts is a SessionEnd hook that
+awaits handleUpdateCounts() before exiting. That handler counts
+settings.json items (skills, hooks, ratings, ...) and refreshes the
+usage cache from the Anthropic API: a usage fetch (3s timeout), a
+cost_report fetch (5s timeout), and a subprocess (3s timeout) — all
+awaited. Because the session waits for its SessionEnd hooks, that
+work is added directly to session close latency. Empirically it is
+the slowest SessionEnd hook (~700ms even with an empty payload, and
+up to ~8-11s if every network call drains its timeout). The file's
+own docstring already claimed "Non-blocking at session end" — this
+patch makes that claim true.
+
+The refresh exists purely to pre-warm the banner/statusline counts
+for the NEXT session; nothing at the current session's close consumes
+its result. So it is moved into a DETACHED child process (same shape
+as patch 0023 for KVSync):
+
+  - Parent mode: reads stdin (hook protocol), spawns a detached child
+    re-running this file with UPDATECOUNTS_DETACHED=1, calls
+    child.unref(), and exits immediately.
+  - Child mode (UPDATECOUNTS_DETACHED=1): imports and runs
+    handleUpdateCounts(), outliving the parent so the pre-warm
+    completes in the background.
+
+NOT a functional removal. The counts refresh still runs on every
+session end and is ready for the next session; only the blocking wait
+is removed. With 0023 + 0024 every network-bound SessionEnd hook is
+now non-blocking.
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/hooks/UpdateCounts.hook.ts   :1-25 (whole body)
+
+Total: 1 file, 1 hunk.
+
+Verification: `bun build --no-bundle` parses the rewritten file;
+invoking the hook with a SessionEnd payload returns in bun-startup
+time (~60ms) with no network wait, versus the prior ~700ms+ await;
+a detached child is spawned and completes the refresh independently.
+Hunk generated via `diff -u` against the upstream v5.0.0 source tree.
+---
+ Releases/v5.0.0/.claude/hooks/UpdateCounts.hook.ts | 24 ++++++++++++++++------
+ 1 file changed, 18 insertions(+), 6 deletions(-)
+
+diff --git a/Releases/v5.0.0/.claude/hooks/UpdateCounts.hook.ts b/Releases/v5.0.0/.claude/hooks/UpdateCounts.hook.ts
+--- a/Releases/v5.0.0/.claude/hooks/UpdateCounts.hook.ts
++++ b/Releases/v5.0.0/.claude/hooks/UpdateCounts.hook.ts
+@@ -8,12 +8,20 @@
+  * have fresh data next session.
+  *
+  * TRIGGER: SessionEnd
+- * PERFORMANCE: ~1-2s (file counting + API calls). Non-blocking at session end.
++ * PERFORMANCE: file counting + Anthropic API calls (usage 3s + cost 5s + a 3s
++ * subprocess, all timeout-bounded). The refresh runs in a DETACHED child
++ * process so it never blocks session close — the parent returns immediately
++ * and the child completes the pre-warm in the background, ready for the next
++ * session.
+  */
+ 
+-import { handleUpdateCounts } from './handlers/UpdateCounts';
++import { readFileSync } from 'fs';
++import { spawn } from 'child_process';
+ 
+-async function main() {
++// Child mode: run the counts refresh (file counting + Anthropic usage/cost
++// API) decoupled from the session lifecycle.
++if (process.env.UPDATECOUNTS_DETACHED === '1') {
++  const { handleUpdateCounts } = await import('./handlers/UpdateCounts');
+   try {
+     await handleUpdateCounts();
+   } catch (err) {
+@@ -22,4 +30,15 @@
+   process.exit(0);
+ }
+ 
+-main();
++// Parent mode: read stdin (hook protocol), spawn the detached refresh, return
++// immediately so session close never waits on the counts pre-warm.
++try { readFileSync(0, 'utf-8'); } catch {}
++
++const child = spawn(process.execPath, [import.meta.path], {
++  detached: true,
++  stdio: 'ignore',
++  env: { ...process.env, UPDATECOUNTS_DETACHED: '1' },
++});
++child.unref();
++
++process.exit(0);
