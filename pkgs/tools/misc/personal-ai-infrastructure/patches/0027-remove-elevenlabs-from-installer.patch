@@ -1,0 +1,970 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Thu, 11 Jun 2026 01:10:00 +0200
+Subject: [PATCH 27/27] Remove ElevenLabs from the installer (key step, LIVE
+ key-validation egress, voice picker)
+
+Upstream issue: (pai-nix — sovereignty policy; no upstream issue.)
+
+Part 2/3 of the vendor-TTS removal (0026 = runtime, 0028 = skills).
+The install wizard was the LAST live vendor egress in the tree:
+engine/detect.ts validateElevenLabsKey() POSTs the user's key to
+api.elevenlabs.io/v1/voices, and generate-welcome.ts synthesizes the
+welcome line through the vendor API. Both are gone, along with every
+place the wizard finds, asks for, stores or reports a vendor key.
+
+What changes:
+
+  - engine/actions.ts — runVoiceSetup (~470 lines: key collection,
+    key validation, vendor voice picker with preview synthesis, env
+    writes) replaced by a no-op placeholder step that keeps step
+    numbering, dependencies and resume state working; a local-TTS
+    patch reactivates it. Key prefill from detection, the EL signals
+    in the backup inventory, the ELEVENLABS_API_KEY env write in
+    runConfiguration, and the vendor key import are removed.
+  - engine/detect.ts — validateElevenLabsKey() deleted (the live
+    egress); ELEVENLABS_API_KEY scan pattern + elevenLabsKeyFound out.
+  - engine/validate.ts — "ElevenLabs API key" check removed (with the
+    runtime de-vendored in 0026 a stored key would mean nothing);
+    summary voiceMode is now "none".
+  - engine/types.ts — elevenLabsKeyFound / apiKeys.elevenLabs /
+    collected.elevenLabsKey fields and the "elevenlabs" voice_enabled
+    mode removed. DEFAULT_VOICES/VoiceOption STAY (config-gen.ts
+    writes daidentity.voices.main.voiceId from them) but are
+    re-documented as legacy opaque ids for the local engine to map.
+  - engine/steps.ts — step descriptions de-vendored (api-keys stays a
+    passthrough; voice is a placeholder).
+  - cli/display.ts, public/app.js, web/routes.ts — vendor key
+    reporting lines and the unused validateElevenLabsKey import out.
+  - generate-welcome.ts — deleted (standalone vendor TTS script).
+
+Verified: anchor-checked substitutions + range-replace with over/
+undershoot guards; rg -i 'elevenlabs|xi-api' clean across PAI-Install
+code (README.md prose = documented residual); zero references to the
+removed symbols; actions/validate/detect/steps/types/config-gen/routes
+transpile (bun build), app.js passes node --check; the whole patch
+series applies cleanly and nix build succeeds.
+
+Known residual: PAI-Install/README.md prose (inert), DOCUMENTATION/
+mentions (since 0026), skills recipes (until 0028).
+---
+ Releases/v5.0.0/.claude/PAI/PAI-Install/cli/display.ts      |   1 -
+ Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts   | 483 ++-----------------------------------
+ Releases/v5.0.0/.claude/PAI/PAI-Install/engine/detect.ts    |  34 ---
+ Releases/v5.0.0/.claude/PAI/PAI-Install/engine/steps.ts     |   4 +-
+ Releases/v5.0.0/.claude/PAI/PAI-Install/engine/types.ts     |  19 +-
+ Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts  |  33 +--
+ Releases/v5.0.0/.claude/PAI/PAI-Install/generate-welcome.ts | 104 --------
+ Releases/v5.0.0/.claude/PAI/PAI-Install/public/app.js       |   3 +-
+ Releases/v5.0.0/.claude/PAI/PAI-Install/web/routes.ts       |   2 +-
+ 9 files changed, 29 insertions(+), 654 deletions(-)
+
+diff --git a/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/display.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/display.ts
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/display.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/cli/display.ts
+@@ -191,7 +191,6 @@ export function printDetection(det: DetectionResult): void {
+     printSuccess(`Detected DA name: ${det.existing.daName} (from prior install/backup)`);
+   }
+   const apiHits: string[] = [];
+-  if (det.existing.apiKeys?.elevenLabs) apiHits.push("ElevenLabs");
+   if (det.existing.apiKeys?.anthropic) apiHits.push("Anthropic");
+   if (det.existing.apiKeys?.openai) apiHits.push("OpenAI");
+   if (det.existing.apiKeys?.google) apiHits.push("Google");
+diff --git a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/actions.ts
+@@ -9,8 +9,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, symlin
+ import { homedir } from "os";
+ import { join, basename, dirname } from "path";
+ import type { InstallState, EngineEventHandler, DetectionResult, ExistingUserContentDetection, StepId } from "./types";
+-import { PAI_VERSION, ALGORITHM_VERSION, DEFAULT_VOICES } from "./types";
+-import { detectSystem, detectExistingUserContent, scanApiKeys, validateElevenLabsKey } from "./detect";
++import { PAI_VERSION, ALGORITHM_VERSION } from "./types";
+ import { generateSettingsJson, expandPath } from "./config-gen";
+ 
+ type ChoiceOption = {
+@@ -283,22 +282,12 @@ function findKeyInBackupDirs(keyName: string): { path: string; value: string }[]
+ function inventoryExistingConfig(): { signals: string[] } {
+   const home = homedir();
+   const signals: string[] = [];
+-  // (1) `~/.config/PAI/.env` — outside `~/.claude/`, often holds the prior key.
+-  const configEnv = join(home, ".config", "PAI", ".env");
+-  if (readKeyFromFile(configEnv, "ELEVENLABS_API_KEY")) {
+-    signals.push(`ElevenLabs key in ${configEnv.replace(home, "~")}`);
+-  }
+-  // (2) Every `.claude*` directory in $HOME EXCEPT `~/.claude/` itself.
++  // Every `.claude*` directory in $HOME EXCEPT `~/.claude/` itself.
+   //     Pattern matches `.claude.bak`, `.claude-bak`, `.claude.backup.20260101`,
+   //     `.claude.previous`, `.claude_old`, `.claude20251215`, etc.
+   try {
+     for (const entry of readdirSync(home)) {
+       if (!entry.startsWith(".claude") || entry === ".claude") continue;
+-      for (const candidate of [join(home, entry, ".env"), join(home, entry, ".config", "PAI", ".env")]) {
+-        if (readKeyFromFile(candidate, "ELEVENLABS_API_KEY")) {
+-          signals.push(`ElevenLabs key in ${candidate.replace(home, "~")}`);
+-        }
+-      }
+       const settingsPath = join(home, entry, "settings.json");
+       if (existsSync(settingsPath)) {
+         try {
+@@ -758,15 +747,11 @@ export async function runSystemDetect(
+     }
+ 
+     detection.existing.apiKeys = scanApiKeys(detection.homeDir, detection.configDir);
+-    detection.existing.elevenLabsKeyFound = !!detection.existing.apiKeys.elevenLabs;
+     detection.existing.hasApiKeys = Object.values(detection.existing.apiKeys).some(Boolean);
+ 
+     if (!state.collected.principalName && detection.principal?.name) {
+       state.collected.principalName = detection.principal.name;
+     }
+-    if (!state.collected.elevenLabsKey && detection.existing.apiKeys?.elevenLabs) {
+-      state.collected.elevenLabsKey = detection.existing.apiKeys.elevenLabs;
+-    }
+     if (!state.collected.timezone && detection.timezone) {
+       state.collected.timezone = detection.timezone;
+     }
+@@ -796,7 +781,6 @@ export async function runSystemDetect(
+     if (detection.principal?.email) preFills.push(`email=${detection.principal.email}`);
+     if (state.collected.timezone) preFills.push(`timezone=${state.collected.timezone}`);
+     const apiHits: string[] = [];
+-    if (detection.existing.apiKeys?.elevenLabs) apiHits.push("ElevenLabs");
+     if (detection.existing.apiKeys?.anthropic) apiHits.push("Anthropic");
+     if (detection.existing.apiKeys?.openai) apiHits.push("OpenAI");
+     if (detection.existing.apiKeys?.google) apiHits.push("Google");
+@@ -927,7 +911,7 @@ export async function runPrerequisites(
+   await emit({ event: "step_complete", step: "prerequisites" });
+ }
+ 
+-// ─── Step 3: API Keys (passthrough — key collection moved to Voice Setup) ──
++// ─── Step 3: API Keys (passthrough — no vendor voice keys; cloud TTS removed) ──
+ 
+ export async function runApiKeys(
+   state: InstallState,
+@@ -935,17 +919,17 @@ export async function runApiKeys(
+   _getInput: InputPrompt,
+   _getChoice: ChoicePrompt
+ ): Promise<void> {
+-  // ElevenLabs key collection is now handled in the Voice Setup step
++  // No vendor voice key is needed (cloud TTS removed by pai-nix).
+   // This step auto-completes to keep the step numbering consistent
+   await emit({ event: "step_start", step: "api-keys" });
+   await emitSectionHeader(
+     emit,
+     "API-KEYS",
+     "API KEYS",
+-    "Voice-related keys are collected later when they are actually needed",
++    "No API keys needed for voice — the DA voice runs on a local engine",
+     3
+   );
+-  await emit({ event: "message", content: "API keys will be collected during Voice Setup." });
++  await emit({ event: "message", content: "No voice keys needed — the DA voice arrives via the local TTS engine." });
+   await emit({ event: "step_complete", step: "api-keys" });
+ }
+ 
+@@ -1507,10 +1491,6 @@ export async function runConfiguration(
+   const envPath = join(configDir, ".env");
+   let envContent = "";
+ 
+-  if (state.collected.elevenLabsKey) {
+-    envContent += `ELEVENLABS_API_KEY=${state.collected.elevenLabsKey}\n`;
+-  }
+-
+   if (envContent) {
+     writeFileSync(envPath, envContent, { mode: 0o600 });
+     await emit({ event: "message", content: "API keys saved securely." });
+@@ -1737,459 +1717,30 @@ async function installPulseMenuBar(paiDir: string, emit: EngineEventHandler): Pr
+ 
+ // ─── Step 7: Voice Setup ─────────────────────────────────────────
+ 
++// The vendor voice setup (key collection, LIVE key-validation egress,
++// voice picker with preview synthesis) was removed together with the
++// runtime vendor egress (patch 0026). The step stays in the flow as a
++// no-op so step numbering, dependencies and resume state keep working;
++// a local-TTS-engine patch reactivates it.
+ export async function runVoiceSetup(
+-  state: InstallState,
++  _state: InstallState,
+   emit: EngineEventHandler,
+-  getChoice: ChoicePrompt,
+-  getInput: InputPrompt,
+-  getChoiceWithPreview?: ChoicePreviewPrompt
++  _getChoice: ChoicePrompt,
++  _getInput: InputPrompt,
++  _getChoiceWithPreview?: ChoicePreviewPrompt
+ ): Promise<void> {
+   await emit({ event: "step_start", step: "voice" });
+   await emitSectionHeader(
+     emit,
+     "DA-VOICE-SETUP",
+     "DA VOICE SETUP",
+-    "Configuring speech, Pulse, and the DA's default voice",
++    "Skipped — the DA voice runs on a local engine (configured post-install)",
+     7
+   );
+-  const daName = state.collected.aiName;
+-
+-  // ── Upfront scan permission gate (UNCONDITIONAL) ──
+-  //
+-  // The very first prompt of the voice step. Fires regardless of whether
+-  // anything is found — the user authorizes the scan BEFORE any read
+-  // happens. This is the point: don't silently touch `~/.config/PAI/.env`,
+-  // `~/.claude*` backup dirs, or stale settings.json voice configs without
+-  // the user's explicit OK, even when the read would return nothing.
+-  //
+-  // If the user says yes → run `inventoryExistingConfig()` and present
+-  // findings (per-item confirmation handled below in key + voice picker).
+-  // If the user says no → never read those locations; go straight to
+-  // "provide your own key OR skip voice".
+-  const allowScanChoice = await getChoice(
+-    "scan-prior-config",
+-    "Look in backup directories and your prior PAI config for existing ElevenLabs voice IDs and API keys?",
+-    [
+-      { label: "Yes — scan and let me confirm anything found", value: "yes", description: "Reads ~/.config/PAI/.env and any ~/.claude.bak / ~/.claude-bak / ~/.claude.backup.* / ~/.claude.previous etc. Per-item confirmation before anything is imported." },
+-      { label: "No — start completely fresh", value: "no", description: "Skip the scan. I'll either enter a new ElevenLabs key or skip voice entirely." },
+-    ],
+-    daName
+-  );
+-  const allowImportPriorConfig = allowScanChoice === "yes";
+-
+-  // Surface the inventory ONLY if the user authorized it.
+-  if (allowImportPriorConfig) {
+-    const inventory = inventoryExistingConfig();
+-    if (inventory.signals.length > 0) {
+-      await emit({
+-        event: "message",
+-        content:
+-          "Scanning prior config — found:\n  • " +
+-          inventory.signals.join("\n  • ") +
+-          "\n\nEach will be presented for individual confirmation below.",
+-      });
+-    } else {
+-      await emit({
+-        event: "message",
+-        content: "Scanned prior config — nothing found. Continuing to fresh-key prompt.",
+-      });
+-    }
+-  }
+-
+-  // ── Collect ElevenLabs key — only reads existing locations if user opted in ──
+-  if (!state.collected.elevenLabsKey) {
+-    let elevenLabsKey = "";
+-
+-    if (allowImportPriorConfig) {
+-      // Step 1: Check active locations (~/.claude/.env, ~/.config/PAI/.env).
+-      await emit({ event: "progress", step: "voice", percent: 5, detail: "Checking existing ElevenLabs key locations..." });
+-      const candidate = findExistingEnvKey("ELEVENLABS_API_KEY");
+-      if (candidate) {
+-        const useIt = await getChoice("confirm-active-key", `Found ElevenLabs API key in ~/.claude/.env or ~/.config/PAI/.env. Use it?`, [
+-          { label: "Yes — validate and use", value: "yes" },
+-          { label: "No — skip this one", value: "no" },
+-        ], daName);
+-        if (useIt === "yes") {
+-          await emit({ event: "message", content: "Validating key against ElevenLabs API..." });
+-          const result = await validateElevenLabsKey(candidate);
+-          if (result.valid) {
+-            state.collected.elevenLabsKey = candidate;
+-            elevenLabsKey = candidate;
+-            await emit({ event: "message", content: "Existing ElevenLabs API key is valid." });
+-          } else {
+-            await emit({ event: "message", content: `Key invalid: ${result.error}. Continuing search.` });
+-          }
+-        }
+-      }
+-
+-      // Step 2: Check backup .claude* directories with per-finding confirmation.
+-      if (!elevenLabsKey) {
+-        const backupHits = findKeyInBackupDirs("ELEVENLABS_API_KEY");
+-        for (const hit of backupHits) {
+-          const useThis = await getChoice(`confirm-backup-${hit.path}`, `Found ElevenLabs key in ${hit.path.replace(homedir(), "~")}. Use it?`, [
+-            { label: "Yes — validate and use", value: "yes" },
+-            { label: "No — skip this one", value: "no" },
+-          ], daName);
+-          if (useThis !== "yes") continue;
+-          await emit({ event: "progress", step: "voice", percent: 10, detail: `Validating key from ${hit.path.replace(homedir(), "~")}...` });
+-          const result = await validateElevenLabsKey(hit.value);
+-          if (result.valid) {
+-            state.collected.elevenLabsKey = hit.value;
+-            elevenLabsKey = hit.value;
+-            await emit({ event: "message", content: `Using ElevenLabs key from ${hit.path.replace(homedir(), "~")}.` });
+-            break;
+-          } else {
+-            await emit({ event: "message", content: `Key from ${hit.path.replace(homedir(), "~")} invalid: ${result.error}.` });
+-          }
+-        }
+-      }
+-    }
+-
+-    // Step 3: If no key was imported (either declined upfront, or no valid key found,
+-    // or scanning was permitted but every candidate was skipped/invalid), prompt the user.
+-    if (!elevenLabsKey) {
+-      const wantsVoice = await getChoice("voice-enable", "Voice requires an ElevenLabs API key. Get one free at elevenlabs.io — without a key, voice notifications are disabled.", [
+-        { label: "I have a key — let me enter it", value: "yes" },
+-        { label: "Skip voice for now", value: "skip", description: "You can add a key later: edit ~/.config/PAI/.env" },
+-      ], daName);
+-
+-      if (wantsVoice === "yes") {
+-        const key = await getInput(
+-          "elevenlabs-key",
+-          "Enter your ElevenLabs API key:",
+-          "key",
+-          "sk_...",
+-          daName
+-        );
+-
+-        if (key.trim()) {
+-          await emit({ event: "progress", step: "voice", percent: 15, detail: "Validating ElevenLabs key..." });
+-          const result = await validateElevenLabsKey(key.trim());
+-          if (result.valid) {
+-            state.collected.elevenLabsKey = key.trim();
+-            await emit({ event: "message", content: "ElevenLabs API key verified." });
+-          } else {
+-            await emit({ event: "message", content: `Key validation failed: ${result.error}. Skipping voice setup.` });
+-          }
+-        }
+-      }
+-    }
+-  }
+-
+-  const hasElevenLabsKey = !!state.collected.elevenLabsKey;
+-  if (!hasElevenLabsKey) {
+-    await emit({ event: "message", content: "No ElevenLabs key — voice will fall back to macOS text-to-speech. You can add a key later in ~/.claude/.env" });
+-  }
+-
+-  const paiDir = state.detection?.paiDir || join(homedir(), ".claude");
+-
+-  // ── Write ELEVENLABS_API_KEY to ~/.claude/.env BEFORE Pulse starts ──
+-  // Pulse loads .env at boot. If we install Pulse before writing the key,
+-  // the daemon comes up without ELEVENLABS_API_KEY in process.env and voice
+-  // silently falls back to macOS `say` — even after the configuration step
+-  // writes .env later. The fix: write the key now, then start Pulse.
+-  if (hasElevenLabsKey) {
+-    try {
+-      const envPath = join(paiDir, ".env");
+-      let envContent = existsSync(envPath) ? readFileSync(envPath, "utf-8") : "";
+-      if (envContent.includes("ELEVENLABS_API_KEY=")) {
+-        envContent = envContent.replace(/ELEVENLABS_API_KEY=.*/, `ELEVENLABS_API_KEY=${state.collected.elevenLabsKey}`);
+-      } else {
+-        envContent = (envContent.trimEnd() + `\nELEVENLABS_API_KEY=${state.collected.elevenLabsKey}\n`).trimStart();
+-      }
+-      writeFileSync(envPath, envContent, { mode: 0o600 });
+-      await emit({ event: "message", content: "ElevenLabs key written to ~/.claude/.env (Pulse will read it on boot)." });
+-    } catch (err: any) {
+-      await emit({ event: "message", content: `Could not write .env: ${err?.message || err}. Voice may fall back to macOS say.` });
+-    }
+-  }
+-
+-  // ── Install Pulse (Y/n) — embeds voice + dashboard + observability ──
+-
+   await emit({
+     event: "message",
+-    content:
+-      "Pulse is the unified PAI runtime: it serves the Life Dashboard at http://localhost:31337, " +
+-      "handles voice notifications (TTS via ElevenLabs), and runs observability + scheduled jobs. " +
+-      (process.platform === "darwin"
+-        ? "Installing it as a launchd agent makes it auto-start on login and stay running across reboots."
+-        : "Starting it as a background process enables voice, dashboard, and scheduled jobs."),
++    content: "Voice setup skipped: cloud TTS was removed from this install. The DA voice will be configured when the local TTS engine lands.",
+   });
+-
+-  const pulsePrompt = process.platform === "darwin"
+-    ? "Install Pulse as a system launchd service?"
+-    : "Start Pulse as a background process?";
+-  const pulseYesDesc = process.platform === "darwin"
+-    ? "Auto-starts on login. Voice + Dashboard + Observability."
+-    : "Voice + Dashboard + Observability. Restart via manage.sh.";
+-  const installPulseChoice = await getChoice("install-pulse", pulsePrompt, [
+-    { label: "Yes \u2014 install Pulse (recommended)", value: "yes", description: pulseYesDesc },
+-    { label: "Skip — don't install Pulse now", value: "skip", description: "Voice notifications will not work until you run: bash ~/.claude/PAI/PULSE/manage.sh install" },
+-  ], daName);
+-
+-  let voiceServerReady = false;
+-  if (installPulseChoice === "yes") {
+-    voiceServerReady = await installPulse(paiDir, emit);
+-  } else {
+-    await emit({ event: "message", content: "Pulse skipped. Voice not enabled — install later via: bash ~/.claude/PAI/PULSE/manage.sh install" });
+-  }
+-
+-  // ── Optional menu bar app (Y/n) — macOS only (launchd plist + .app bundle) ──
+-  if (voiceServerReady && process.platform === "darwin") {
+-    await emit({
+-      event: "message",
+-      content:
+-        "The Pulse menu bar app shows live status in your macOS menu bar (running indicator, " +
+-        "quick access to the Life Dashboard, mute/unmute voice). It builds a small .app bundle " +
+-        "and installs a second launchd plist that auto-starts on login.",
+-    });
+-    const installMenuBarChoice = await getChoice("install-menubar", "Install the Pulse menu bar app?", [
+-      { label: "Yes — install menu bar app", value: "yes", description: "Adds an icon to your menu bar. Auto-starts on login." },
+-      { label: "Skip — Pulse runs without menu bar", value: "skip", description: "Pulse keeps running. You can install the menu bar later: bash ~/.claude/PAI/PULSE/MenuBar/install.sh" },
+-    ], daName);
+-
+-    if (installMenuBarChoice === "yes") {
+-      await installPulseMenuBar(paiDir, emit);
+-    } else {
+-      await emit({ event: "message", content: "Menu bar skipped. Install later: bash ~/.claude/PAI/PULSE/MenuBar/install.sh" });
+-    }
+-  }
+-
+-  // ── Digital Assistant Voice selection ──
+-  await emit({ event: "progress", step: "voice", percent: 40, detail: "Choosing Digital Assistant voice..." });
+-
+-  let selectedVoiceId = "";
+-
+-  // Check for existing voice config from previous installations — gated on
+-  // the upfront import permission. Without that consent we never read prior
+-  // settings.json files.
+-  if (allowImportPriorConfig) {
+-    const existingVoice = findExistingVoiceConfig();
+-    if (existingVoice) {
+-      const sourceLabel = existingVoice.aiName
+-        ? `${existingVoice.aiName}'s voice (${existingVoice.voiceId.substring(0, 8)}...)`
+-        : `Voice ID ${existingVoice.voiceId.substring(0, 8)}...`;
+-      await emit({ event: "message", content: `Found existing voice configuration in ${existingVoice.source}` });
+-
+-      const useExisting = await getChoice("voice-existing", `Use ${sourceLabel}?`, [
+-        { label: "Yes, import this voice ID", value: "keep", description: `Voice ID: ${existingVoice.voiceId}` },
+-        { label: "No, pick a new voice", value: "new", description: "Choose from the 6 built-in voices, enter a custom ID, or skip" },
+-      ], daName);
+-
+-      if (useExisting === "keep") {
+-        selectedVoiceId = existingVoice.voiceId;
+-        state.collected.voiceType = "custom";
+-        state.collected.customVoiceId = selectedVoiceId;
+-      }
+-    }
+-  }
+-
+-  // Voice picker — 6 built-in voices (2 female, 2 male, 2 neutral), plus
+-  // Custom Voice ID and Skip Voice. Source of truth for IDs is types.ts
+-  // (DEFAULT_VOICES). If the user has no ElevenLabs key, "Skip" is the
+-  // honest path — picking a voice without a key just disables voice anyway.
+-  if (!selectedVoiceId) {
+-    await emit({ event: "progress", step: "voice", percent: 45, detail: "Pick a voice for your DA..." });
+-
+-    const hasKey = !!state.collected.elevenLabsKey;
+-    const previewText = `Hi, I'll be ${state.collected.aiName || "your assistant"}. This is what I sound like.`;
+-    const pickerChoices = [
+-      ...DEFAULT_VOICES.map((v) => ({ label: v.label, value: v.id, description: v.description, voiceId: v.voiceId })),
+-      { label: "Custom Voice ID", value: "custom", description: "Paste your own ElevenLabs voice ID" },
+-      { label: "Skip — no voice", value: "skip", description: hasKey ? "Voice disabled (key still saved for later use)" : "Voice disabled (no key was provided)" },
+-    ];
+-    const voiceType = voiceServerReady && getChoiceWithPreview
+-      ? await getChoiceWithPreview("voice-type", "Digital Assistant Voice — Pick the voice your DA speaks with:", pickerChoices, previewText, daName)
+-      : await getChoice("voice-type", "Digital Assistant Voice — Pick the voice your DA speaks with:", pickerChoices, daName);
+-
+-    if (voiceType === "skip") {
+-      selectedVoiceId = "";
+-      state.collected.voiceType = "skip" as any;
+-    } else if (voiceType === "custom") {
+-      const customId = await getInput(
+-        "custom-voice-id",
+-        "Enter your ElevenLabs Voice ID:\nFind it at: elevenlabs.io/app/voice-library → Your voice → Voice ID",
+-        "text",
+-        "e.g., AyCt0WmAXUcPJR11zeeP",
+-        daName
+-      );
+-      selectedVoiceId = customId.trim();
+-      if (selectedVoiceId) {
+-        state.collected.voiceType = "custom";
+-        state.collected.customVoiceId = selectedVoiceId;
+-      } else {
+-        await emit({ event: "message", content: "No custom voice ID entered. Voice will be skipped." });
+-        state.collected.voiceType = "skip" as any;
+-      }
+-    } else {
+-      const found = DEFAULT_VOICES.find((v) => v.id === voiceType);
+-      if (found) {
+-        selectedVoiceId = found.voiceId;
+-        state.collected.voiceType = voiceType as any;
+-      } else {
+-        // Defensive fallback — shouldn't happen unless picker IDs drift
+-        selectedVoiceId = DEFAULT_VOICES[0].voiceId;
+-        state.collected.voiceType = DEFAULT_VOICES[0].id as any;
+-      }
+-    }
+-  }
+-
+-  // If we got here without a key AND without skipping voice, we've still
+-  // selected a voice ID but TTS will fail at runtime. That's acceptable —
+-  // the user can add a key later and the voice ID is already saved.
+-  if (!state.collected.elevenLabsKey && selectedVoiceId) {
+-    await emit({
+-      event: "message",
+-      content:
+-        "Voice ID saved, but voice is disabled until you add an ElevenLabs API key. " +
+-        "Edit ~/.config/PAI/.env and set ELEVENLABS_API_KEY=sk_...",
+-    });
+-  }
+-
+-  // ── Update settings.json with voice ID ──
+-  await emit({ event: "progress", step: "voice", percent: 60, detail: "Saving voice configuration..." });
+-  const settingsPath = join(paiDir, "settings.json");
+-
+-  if (existsSync(settingsPath)) {
+-    try {
+-      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+-      if (settings.daidentity) {
+-        settings.daidentity.voiceId = selectedVoiceId;
+-        settings.daidentity.voices = settings.daidentity.voices || {};
+-        settings.daidentity.voices.main = {
+-          voiceId: selectedVoiceId,
+-          stability: 0.35,
+-          similarityBoost: 0.80,
+-          style: 0.90,
+-          speed: 1.1,
+-        };
+-        settings.daidentity.voices.algorithm = {
+-          voiceId: selectedVoiceId,
+-          stability: 0.35,
+-          similarityBoost: 0.80,
+-          style: 0.90,
+-          speed: 1.1,
+-        };
+-      }
+-      writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+-      await emit({ event: "message", content: "Voice settings saved to settings.json." });
+-    } catch {
+-      // Non-fatal
+-    }
+-  }
+-
+-  // ── Save ElevenLabs key to .env (if provided) ──
+-  if (hasElevenLabsKey) {
+-    const configDir = state.detection?.configDir || join(homedir(), ".config", "PAI");
+-    const envPath = join(configDir, ".env");
+-    if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
+-
+-    let envContent = existsSync(envPath) ? readFileSync(envPath, "utf-8") : "";
+-    if (envContent.includes("ELEVENLABS_API_KEY=")) {
+-      envContent = envContent.replace(/ELEVENLABS_API_KEY=.*/, `ELEVENLABS_API_KEY=${state.collected.elevenLabsKey}`);
+-    } else {
+-      envContent = envContent.trim() + `\nELEVENLABS_API_KEY=${state.collected.elevenLabsKey}\n`;
+-    }
+-    writeFileSync(envPath, envContent.trim() + "\n", { mode: 0o600 });
+-
+-    // Ensure symlinks exist at both ~/.claude/.env and ~/.env
+-    const symlinkTargets = [
+-      join(paiDir, ".env"),
+-      join(homedir(), ".env"),
+-    ];
+-    for (const sp of symlinkTargets) {
+-      try {
+-        if (existsSync(sp)) {
+-          if (lstatSync(sp).isSymbolicLink()) unlinkSync(sp);
+-          else continue;
+-        }
+-        symlinkSync(envPath, sp);
+-      } catch { /* non-fatal */ }
+-    }
+-  }
+-
+-  // ── Test TTS and confirm with user ──
+-  if (voiceServerReady) {
+-    let voiceConfirmed = false;
+-    while (!voiceConfirmed) {
+-      await emit({ event: "progress", step: "voice", percent: 80, detail: "Testing voice output..." });
+-      try {
+-        const aiName = state.collected.aiName || "PAI";
+-        const userName = state.collected.principalName || "there";
+-        const testRes = await fetch("http://localhost:31337/notify", {
+-          method: "POST",
+-          headers: { "Content-Type": "application/json" },
+-          body: JSON.stringify({
+-            message: `Hello ${userName}, this is ${aiName}. My voice system is online and ready to assist you.`,
+-            voice_id: selectedVoiceId,
+-            voice_settings: { stability: 0.35, similarity_boost: 0.80, style: 0.90, speed: 1.1, use_speaker_boost: true },
+-          }),
+-          signal: AbortSignal.timeout(10000),
+-        });
+-        if (testRes.ok) {
+-          await emit({ event: "message", content: `Voice test sent — listen for ${aiName} speaking...`, speak: false });
+-
+-          // Ask user to confirm they heard it and like it
+-          const confirm = await getChoice("voice-confirm", "Did you hear the voice? Does it sound good?", [
+-            { label: "Sounds great!", value: "yes" },
+-            { label: "Pick a different voice", value: "change" },
+-            { label: "Skip voice for now", value: "skip" },
+-          ], daName);
+-
+-          if (confirm === "yes") {
+-            voiceConfirmed = true;
+-          } else if (confirm === "skip") {
+-            voiceConfirmed = true;
+-          } else {
+-            // Let them pick again
+-            const retryChoices = [
+-              ...DEFAULT_VOICES.map((v) => ({ label: v.label, value: v.id, description: v.description, voiceId: v.voiceId })),
+-              { label: "Custom Voice ID", value: "custom", description: "Enter your own ElevenLabs voice ID" },
+-            ];
+-            const retryPreviewText = `Hi, I'll be ${state.collected.aiName || "your assistant"}. This is what I sound like.`;
+-            const newVoice = getChoiceWithPreview
+-              ? await getChoiceWithPreview("voice-type-retry", "Choose a different voice:", retryChoices, retryPreviewText, daName)
+-              : await getChoice("voice-type-retry", "Choose a different voice:", retryChoices, daName);
+-            if (newVoice === "custom") {
+-              const newId = await getInput("custom-voice-id-retry", "Enter your ElevenLabs Voice ID:", "text", "e.g., AyCt0WmAXUcPJR11zeeP", daName);
+-              selectedVoiceId = newId.trim() || selectedVoiceId;
+-              state.collected.voiceType = "custom";
+-              state.collected.customVoiceId = selectedVoiceId;
+-            } else {
+-              const found = DEFAULT_VOICES.find((v) => v.id === newVoice);
+-              selectedVoiceId = found?.voiceId || DEFAULT_VOICES[0].voiceId;
+-              state.collected.voiceType = newVoice as any;
+-            }
+-            // Update settings.json with new choice before re-testing
+-            try {
+-              const s = JSON.parse(readFileSync(settingsPath, "utf-8"));
+-              if (s.daidentity?.voices?.main) s.daidentity.voices.main.voiceId = selectedVoiceId;
+-              if (s.daidentity?.voices?.algorithm) s.daidentity.voices.algorithm.voiceId = selectedVoiceId;
+-              writeFileSync(settingsPath, JSON.stringify(s, null, 2));
+-            } catch { /* non-fatal */ }
+-          }
+-        } else {
+-          await emit({ event: "message", content: "Voice test returned an error. Voice may need manual configuration." });
+-          voiceConfirmed = true;
+-        }
+-      } catch {
+-        await emit({ event: "message", content: "Voice test timed out. Server may still be initializing." });
+-        voiceConfirmed = true;
+-      }
+-    }
+-  }
+-
+-  const voiceLabel = state.collected.voiceType === "custom"
+-    ? `Custom voice (${selectedVoiceId.substring(0, 8)}...)`
+-    : state.collected.voiceType || "default";
+-  await emit({ event: "message", content: `Digital Assistant voice configured: ${voiceLabel}` });
+-
+-  // Reload Pulse so the voice pick we just wrote to settings.json is actually
+-  // honored at runtime (Pulse caches defaultVoiceId at init — without this
+-  // restart, every skill curl that omits voice_id stays on the stale template
+-  // default until the next manual restart).
+-  await reloadPulse(paiDir, emit);
+-
+   await emit({ event: "step_complete", step: "voice" });
+ }
+ 
+diff --git a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/detect.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/detect.ts
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/detect.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/detect.ts
+@@ -71,7 +71,6 @@ function detectExisting(
+   const result: DetectionResult["existing"] = {
+     paiInstalled: false,
+     hasApiKeys: false,
+-    elevenLabsKeyFound: false,
+     backupPaths: [],
+     apiKeys: {},
+   };
+@@ -126,7 +125,6 @@ export function scanApiKeys(
+   ];
+ 
+   const patterns: Array<[keyof NonNullable<DetectionResult["existing"]["apiKeys"]>, RegExp]> = [
+-    ["elevenLabs", /(?:^|\n)\s*(?:export\s+)?ELEVENLABS_API_KEY\s*=\s*["']?([^"'\s#]+)/],
+     ["anthropic", /(?:^|\n)\s*(?:export\s+)?ANTHROPIC_API_KEY\s*=\s*["']?([^"'\s#]+)/],
+     ["openai", /(?:^|\n)\s*(?:export\s+)?OPENAI_API_KEY\s*=\s*["']?([^"'\s#]+)/],
+     ["google", /(?:^|\n)\s*(?:export\s+)?(?:GEMINI_API_KEY|GOOGLE_API_KEY|GOOGLE_GENAI_API_KEY)\s*=\s*["']?([^"'\s#]+)/],
+@@ -365,35 +363,3 @@ export function detectSystem(): DetectionResult {
+   };
+ }
+ 
+-/**
+- * Validate an ElevenLabs API key.
+- * Uses /v1/voices endpoint (requires only xi-api-key header, no specific scope)
+- * instead of /v1/user (requires user_read permission, which many keys lack).
+- * Also handles 401 with missing_permissions as "valid key, limited scope" —
+- * TTS works fine with a known voice_id even without voices_read permission.
+- */
+-export async function validateElevenLabsKey(key: string): Promise<{ valid: boolean; error?: string }> {
+-  try {
+-    const res = await fetch("https://api.elevenlabs.io/v1/voices", {
+-      headers: { "xi-api-key": key },
+-      signal: AbortSignal.timeout(10000),
+-    });
+-
+-    if (res.ok) return { valid: true };
+-
+-    // 401 with missing_permissions means the key IS valid but lacks a specific scope.
+-    // TTS still works (doesn't need voices_read to use a known voice_id).
+-    if (res.status === 401) {
+-      try {
+-        const body = await res.json();
+-        if (body?.detail?.status === "missing_permissions") {
+-          return { valid: true };
+-        }
+-      } catch { /* fall through to error */ }
+-    }
+-
+-    return { valid: false, error: `HTTP ${res.status}` };
+-  } catch (e: any) {
+-    return { valid: false, error: e.message || "Network error" };
+-  }
+-}
+diff --git a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/steps.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/steps.ts
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/steps.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/steps.ts
+@@ -25,7 +25,7 @@ export const STEPS: StepDefinition[] = [
+   {
+     id: "api-keys",
+     name: "API Keys",
+-    description: "Find or collect ElevenLabs API key for voice features",
++    description: "Legacy key step — auto-completes (no vendor voice keys)",
+     number: 3,
+     required: true,
+     dependsOn: ["prerequisites"],
+@@ -57,7 +57,7 @@ export const STEPS: StepDefinition[] = [
+   {
+     id: "voice",
+     name: "Digital Assistant Voice",
+-    description: "Configure ElevenLabs key, select voice, start voice server, and test",
++    description: "Voice placeholder — local TTS engine arrives in a later patch",
+     number: 7,
+     required: true,
+     dependsOn: ["configuration"],
+diff --git a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/types.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/types.ts
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/types.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/types.ts
+@@ -29,13 +29,11 @@ export interface DetectionResult {
+     paiVersion?: string;
+     settingsPath?: string;
+     hasApiKeys: boolean;
+-    elevenLabsKeyFound: boolean;
+     backupPaths: string[];
+     /** DA name recovered from a prior install or backup (DA_IDENTITY.md / settings.json). */
+     daName?: string;
+     /** API key VALUES recovered from shell rc files / .env / prior install — not just presence flags. */
+     apiKeys: {
+-      elevenLabs?: string;
+       anthropic?: string;
+       openai?: string;
+       google?: string;
+@@ -154,7 +152,6 @@ export interface InstallState {
+ 
+   // Collected data
+   collected: {
+-    elevenLabsKey?: string;
+     scanConsent?: "yes-full" | "yes-id" | "no";
+     principalName?: string;
+     timezone?: string;
+@@ -208,7 +205,7 @@ export type ServerMessage =
+   | { type: "input_request"; id: string; prompt: string; inputType: "text" | "password" | "key"; placeholder?: string }
+   | { type: "choice_request"; id: string; prompt: string; choices: { label: string; value: string; description?: string }[] }
+   | { type: "progress"; step: StepId; percent: number; detail: string }
+-  | { type: "voice_enabled"; enabled: boolean; mode: "elevenlabs" | "browser" | "none" }
++  | { type: "voice_enabled"; enabled: boolean; mode: "browser" | "none" }
+   | { type: "install_complete"; success: boolean; summary: InstallSummary }
+   | { type: "validation_result"; checks: ValidationCheck[] }
+   | { type: "error"; message: string; step?: StepId };
+@@ -275,18 +272,14 @@ export const PAI_VERSION = "5.0.0";
+ export const ALGORITHM_VERSION = "6.2.0";
+ export const INSTALLER_VERSION = "5.0";
+ 
+-// ElevenLabs voice IDs for the install picker. Six built-in options across
+-// three gender presentations, two voices each, so a fresh user can pick
+-// without needing to know what an ElevenLabs voice ID is. Custom Voice ID
+-// and Skip Voice are surfaced alongside these in the picker UI.
+-//
+-// These IDs are public ElevenLabs voice identifiers — not API keys, not
+-// credentials. They identify which TTS voice to render with; the user's own
+-// ELEVENLABS_API_KEY is required separately to actually invoke synthesis.
++// Legacy voice ids for the install picker (vendor-era). Kept as opaque
++// values because config-gen writes daidentity.voices.main.voiceId from
++// them; the local TTS engine maps or ignores these ids. No key, no vendor
++// account, no synthesis happens in the installer.
+ export interface VoiceOption {
+   /** Stable picker key, used in state.collected.voiceType. */
+   id: string;
+-  /** Public ElevenLabs voice ID (no auth, just an identifier). */
++  /** Legacy opaque voice id (no auth, just an identifier). */
+   voiceId: string;
+   /** Label shown in the picker. */
+   label: string;
+diff --git a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/engine/validate.ts
+@@ -190,36 +190,7 @@ export async function runValidation(state: InstallState, emit?: EngineEventHandl
+     critical: false,
+   });
+ 
+-  // 5. ElevenLabs key stored — check all three possible locations
+-  const envPaths = [
+-    join(configDir, ".env"),
+-    join(paiDir, ".env"),
+-    join(homedir(), ".env"),
+-  ];
+-  let elevenLabsKeyStored = false;
+-  let elevenLabsKeyLocation = "";
+-  for (const ep of envPaths) {
+-    if (existsSync(ep)) {
+-      try {
+-        const envContent = readFileSync(ep, "utf-8");
+-        if (envContent.includes("ELEVENLABS_API_KEY=") &&
+-            !envContent.includes("ELEVENLABS_API_KEY=\n")) {
+-          elevenLabsKeyStored = true;
+-          elevenLabsKeyLocation = ep;
+-          break;
+-        }
+-      } catch {}
+-    }
+-  }
+-
+-  checks.push({
+-    name: "ElevenLabs API key",
+-    passed: elevenLabsKeyStored,
+-    detail: elevenLabsKeyStored ? `Stored in ${elevenLabsKeyLocation}` : state.collected.elevenLabsKey ? "Collected but not saved" : "Not configured",
+-    critical: false,
+-  });
+-
+-  // 6. DA voice configured in settings (nested under voices.main.voiceId)
++  // 5. DA voice configured in settings (nested under voices.main.voiceId)
+   const voiceId = settings?.daidentity?.voices?.main?.voiceId;
+   const voiceIdConfigured = !!voiceId;
+ 
+@@ -307,7 +278,7 @@ export function generateSummary(state: InstallState): InstallSummary {
+     aiName: state.collected.aiName || "PAI",
+     timezone: state.collected.timezone || "UTC",
+     voiceEnabled: state.completedSteps.includes("voice"),
+-    voiceMode: state.collected.elevenLabsKey ? "elevenlabs" : state.completedSteps.includes("voice") ? "macos-say" : "none",
++    voiceMode: "none",
+     catchphrase: state.collected.catchphrase || "",
+     installType: state.installType || "fresh",
+     completedSteps: state.completedSteps.length,
+diff --git a/Releases/v5.0.0/.claude/PAI/PAI-Install/generate-welcome.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/generate-welcome.ts
+deleted file mode 100644
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/generate-welcome.ts
++++ /dev/null
+@@ -1,104 +0,0 @@
+-#!/usr/bin/env bun
+-/**
+- * PAI Installer v5.0 — Welcome MP3 Generator
+- * Uses ElevenLabs API to generate the welcome audio with a voice clone.
+- *
+- * Usage: bun generate-welcome.ts
+- *
+- * Requires: ELEVENLABS_API_KEY environment variable
+- * Uses voice clone ID from settings.json principal.voiceClone
+- */
+-
+-import { writeFileSync, readFileSync, existsSync } from "fs";
+-import { join, dirname } from "path";
+-import { homedir } from "os";
+-
+-const OUTPUT_PATH = join(import.meta.dir, "public", "assets", "welcome.mp3");
+-
+-// Voice ID — check env var, then settings.json voices, then default
+-function getVoiceId(): string {
+-  // Environment variable takes priority
+-  if (process.env.ELEVENLABS_VOICE_ID) return process.env.ELEVENLABS_VOICE_ID;
+-
+-  const settingsPath = join(homedir(), ".claude", "settings.json");
+-  if (existsSync(settingsPath)) {
+-    try {
+-      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+-      // Use principal's voice clone (the installer speaks in the user's voice)
+-      const clone = settings.principal?.voiceClone;
+-      if (typeof clone === "string") return clone;
+-      if (typeof clone?.voiceId === "string") return clone.voiceId;
+-      // Fallback to DA main voice
+-      const mainVoice = settings.daidentity?.voices?.main?.voiceId;
+-      if (typeof mainVoice === "string") return mainVoice;
+-    } catch {}
+-  }
+-  // Fallback to a default ElevenLabs voice
+-  return "pNInz6obpgDQGcFmaJgB"; // Adam
+-}
+-
+-async function generateWelcome() {
+-  const apiKey = process.env.ELEVENLABS_API_KEY;
+-  if (!apiKey) {
+-    // Try to read from config
+-    const envPath = join(homedir(), ".config", "PAI", ".env");
+-    if (existsSync(envPath)) {
+-      const envContent = readFileSync(envPath, "utf-8");
+-      const match = envContent.match(/ELEVENLABS_API_KEY=(.+)/);
+-      if (match) {
+-        process.env.ELEVENLABS_API_KEY = match[1].trim();
+-      }
+-    }
+-
+-    if (!process.env.ELEVENLABS_API_KEY) {
+-      console.error("Error: ELEVENLABS_API_KEY not found in environment or ~/.claude/PAI/.env");
+-      console.error("Set it with: export ELEVENLABS_API_KEY=your-key-here");
+-      process.exit(1);
+-    }
+-  }
+-
+-  const voiceId = getVoiceId();
+-  const text = "Welcome to Personal AI Infrastructure. <break time=\"1.0s\" /> Magnifying human capabilities.";
+-
+-  console.log(`Generating welcome audio...`);
+-  console.log(`  Voice ID: ${voiceId}`);
+-  console.log(`  Text: "${text}"`);
+-  console.log(`  Output: ${OUTPUT_PATH}`);
+-
+-  const response = await fetch(
+-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+-    {
+-      method: "POST",
+-      headers: {
+-        "xi-api-key": process.env.ELEVENLABS_API_KEY!,
+-        "Content-Type": "application/json",
+-      },
+-      body: JSON.stringify({
+-        text,
+-        model_id: "eleven_turbo_v2_5",
+-        voice_settings: {
+-          stability: 0.85,
+-          similarity_boost: 0.9,
+-          style: 0.1,
+-          use_speaker_boost: true,
+-        },
+-      }),
+-    }
+-  );
+-
+-  if (!response.ok) {
+-    const error = await response.text();
+-    console.error(`ElevenLabs API error (${response.status}): ${error}`);
+-    process.exit(1);
+-  }
+-
+-  const buffer = await response.arrayBuffer();
+-  writeFileSync(OUTPUT_PATH, Buffer.from(buffer));
+-
+-  console.log(`\n✓ Welcome audio generated: ${OUTPUT_PATH} (${Math.round(buffer.byteLength / 1024)}KB)`);
+-}
+-
+-generateWelcome().catch((err) => {
+-  console.error("Error:", err.message);
+-  process.exit(1);
+-});
+diff --git a/Releases/v5.0.0/.claude/PAI/PAI-Install/public/app.js b/Releases/v5.0.0/.claude/PAI/PAI-Install/public/app.js
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/public/app.js
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/public/app.js
+@@ -75,7 +75,7 @@ function handleServerMessage(msg) {
+     case 'message':
+       addMessage(msg.role || 'assistant', msg.content, isReplayed);
+       if (msg.speak && !isReplayed && voiceEnabled) {
+-        // TTS would go here if we had the ElevenLabs key
++        // TTS hook point — no engine in the installer (cloud TTS removed)
+       }
+       break;
+ 
+@@ -214,7 +214,6 @@ function renderDetection(data) {
+     { icon: data.tools?.claude?.installed ? 'check' : 'info', label: 'Claude Code', value: data.tools?.claude?.installed ? 'v' + data.tools.claude.version : 'Will install' },
+     { icon: 'info', label: 'Timezone', value: data.timezone },
+     { icon: data.existing?.paiInstalled ? 'info' : 'check', label: 'Existing PAI', value: data.existing?.paiInstalled ? 'v' + (data.existing.paiVersion || '?') : 'Fresh install' },
+-    { icon: data.existing?.hasApiKeys ? 'check' : 'info', label: 'ElevenLabs Key', value: data.existing?.elevenLabsKeyFound ? 'Found' : 'Not found' },
+   ];
+ 
+   const grid = document.createElement('div');
+diff --git a/Releases/v5.0.0/.claude/PAI/PAI-Install/web/routes.ts b/Releases/v5.0.0/.claude/PAI/PAI-Install/web/routes.ts
+--- a/Releases/v5.0.0/.claude/PAI/PAI-Install/web/routes.ts
++++ b/Releases/v5.0.0/.claude/PAI/PAI-Install/web/routes.ts
+@@ -4,7 +4,7 @@
+  */
+ 
+ import type { InstallState, EngineEvent, ServerMessage, ClientMessage } from "../engine/types";
+-import { detectSystem, validateElevenLabsKey } from "../engine/detect";
++import { detectSystem } from "../engine/detect";
+ import {
+   runSystemDetect,
+   runPrerequisites,
