@@ -47,6 +47,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0023-kvsync-detach-boundary-push.patch
     ./patches/0024-updatecounts-detach-session-end.patch
     ./patches/0025-remove-empty-plans-dir-at-session-end.patch
+    ./patches/0026-remove-elevenlabs-voice-runtime.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];
