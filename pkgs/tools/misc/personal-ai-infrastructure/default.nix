@@ -81,6 +81,13 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     # broken links are removed; valid symlinks stay intact.
     find $out/share/personal-ai-infrastructure -xtype l -delete 2>/dev/null || true
 
+    # Strip GNU patch backup files. When a series patch applies with fuzz,
+    # patch(1)'s default backup-if-mismatch leaves a pre-patch copy behind
+    # (settings.json.orig in the wild — carrying the exact strings a patch
+    # just removed). The wrapper's cp -rT would deliver them into the
+    # user's ~/.claude; strip at build time.
+    find $out/share/personal-ai-infrastructure -name '*.orig' -delete 2>/dev/null || true
+
     # Install the wrapper script.
     install -dm755 $out/bin
     cat > $out/bin/pai << 'WRAPPER'
