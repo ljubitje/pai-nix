@@ -49,6 +49,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/0025-remove-empty-plans-dir-at-session-end.patch
     ./patches/0026-remove-elevenlabs-voice-runtime.patch
     ./patches/0027-remove-elevenlabs-from-installer.patch
+    ./patches/0028-remove-elevenlabs-from-skills.patch
   ];
   nativeBuildInputs = [ makeWrapper ];
   buildInputs = [ bun nodejs git curl jq electron claude-code ];

@@ -1,0 +1,467 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Thu, 11 Jun 2026 01:30:00 +0200
+Subject: [PATCH 28/28] Remove ElevenLabs from skills, the /interview voice
+ template and the release README
+
+Upstream issue: (pai-nix — sovereignty policy; no upstream issue.)
+
+Part 3/3 of the vendor-TTS removal (0026 = runtime, 0027 = installer).
+Skills are executable instructions for the model — a skill that teaches
+"call the vendor TTS API with ELEVENLABS_API_KEY" is functionality, not
+prose, and after 0026/0027 it could only ever fail.
+
+What changes:
+
+  - skills/Remotion — Tools/Ref-elevenlabs-captions.md DELETED (pure
+    vendor recipe); the TTS/STT steps in Tools/Ref-ai-pipeline.md and
+    Workflows/GeneratedContentVideo.md become local-first placeholders
+    (manual/local narration + local Whisper captions via AudioEditor)
+    until the local TTS engine lands; SKILL.md description de-vendored;
+    dangling pointers to the deleted file removed.
+  - skills/Agents — voice registry comments in Data/Traits.yaml
+    re-documented as legacy opaque ids (ids themselves stay — they are
+    composition data the local engine maps or ignores);
+    AgentPersonalities.md, SKILL.md, CUSTOMAGENTTEMPLATE.md de-vendored.
+  - skills/Prompting — VoicePresets.yaml defaults de-vendored (model:
+    none — the vendor model id is meaningless here); Voice.hbs label.
+  - PAI/TOOLS/DAInterview.ts — the /interview tool's embedded YAML
+    template wrote "provider: elevenlabs" into the user's voice config;
+    now "provider: none" until the local engine registers its own.
+  - README.md (release root) — after 0027 the README was WRONG: it
+    promised the wizard "prompts for your ElevenLabs API key". First-run
+    copy now tells the truth: voice arrives via a local TTS engine;
+    the vendor-key prerequisite bullet is gone.
+
+Verified: anchor-checked substitutions (count-guarded); rg -i
+'elevenlabs|xi-api' clean across skills/ and README.md; zero dangling
+references to the deleted reference file; both touched YAML files still
+parse; whole series applies cleanly and nix build succeeds.
+
+Known residual (deliberate, inert): DOCUMENTATION/*.md prose,
+PAI-Install/README.md prose, skills/Art YouTube thumbnail example
+SPECIFICATIONS.md (describes a vendor logo visible in an example
+screenshot), Observability finances demo page + minified chunk.
+---
+ Releases/v5.0.0/.claude/PAI/TOOLS/DAInterview.ts                      |  2 +-
+ Releases/v5.0.0/.claude/README.md                                     |  5 +--
+ Releases/v5.0.0/.claude/skills/Agents/AgentPersonalities.md           |  4 +-
+ Releases/v5.0.0/.claude/skills/Agents/Data/Traits.yaml                |  8 ++--
+ Releases/v5.0.0/.claude/skills/Agents/SKILL.md                        |  6 +--
+ .../v5.0.0/.claude/skills/Agents/Templates/CUSTOMAGENTTEMPLATE.md     |  2 +-
+ .../v5.0.0/.claude/skills/Prompting/Templates/Data/VoicePresets.yaml  |  4 +-
+ .../v5.0.0/.claude/skills/Prompting/Templates/Primitives/Voice.hbs    |  2 +-
+ Releases/v5.0.0/.claude/skills/Remotion/SKILL.md                      |  4 +-
+ Releases/v5.0.0/.claude/skills/Remotion/Tools/Ref-ai-pipeline.md      | 45 ++++++----------------
+ .../v5.0.0/.claude/skills/Remotion/Tools/Ref-elevenlabs-captions.md   | 57 ----------------------------
+ .../v5.0.0/.claude/skills/Remotion/Workflows/GeneratedContentVideo.md | 67 +++++----------------------------
+ 12 files changed, 39 insertions(+), 167 deletions(-)
+
+diff --git a/Releases/v5.0.0/.claude/PAI/TOOLS/DAInterview.ts b/Releases/v5.0.0/.claude/PAI/TOOLS/DAInterview.ts
+--- a/Releases/v5.0.0/.claude/PAI/TOOLS/DAInterview.ts
++++ b/Releases/v5.0.0/.claude/PAI/TOOLS/DAInterview.ts
+@@ -443,7 +443,7 @@ core:
+ 
+ # -- Voice ---------------------------------------------------------------
+ voice:
+-  provider: elevenlabs
++  provider: none  # cloud TTS removed by pai-nix; local engine sets its own
+   main:
+     voice_id: ""
+     stability: 0.85
+diff --git a/Releases/v5.0.0/.claude/README.md b/Releases/v5.0.0/.claude/README.md
+--- a/Releases/v5.0.0/.claude/README.md
++++ b/Releases/v5.0.0/.claude/README.md
+@@ -8,7 +8,7 @@
+ 
+ ## What you get
+ 
+-- **A Digital Assistant (DA)** — named by you, voiced by you, running as a peer. Ships with a generic "PAI" DA on free public ElevenLabs voices so you can hear it out of the box; `/interview` personalizes it.
++- **A Digital Assistant (DA)** — named by you, voiced by you, running as a peer. Ships with a generic "PAI" DA; the voice runs on a local TTS engine (cloud TTS is removed in this packaging). `/interview` personalizes it.
+ - **The Algorithm** — a structured problem-solving framework (OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN) that the DA runs for non-trivial tasks.
+ - **Pulse** — a local daemon on port 31337 that provides voice notifications, observability, scheduled tasks, and a Life Dashboard. Runs as a macOS launchd service with a menu bar app.
+ - **Skills** — 40+ composable capabilities (research, creative writing, security assessment, Cloudflare deploys, voice, etc.) that the DA self-selects at runtime.
+@@ -24,7 +24,6 @@
+ - macOS or Linux (Linux support is partial — Pulse menu bar is macOS-only)
+ - [Claude Code](https://docs.claude.com/claude-code) installed
+ - An [Anthropic API key](https://console.anthropic.com/) (required — Claude Code uses it)
+-- An [ElevenLabs API key](https://elevenlabs.io/) (optional — enables voice notifications)
+ 
+ ### ⚠️ Important: back up existing `~/.claude/` first
+ 
+@@ -47,7 +46,7 @@ cd ~/.claude
+ The installer will:
+ 1. Check/install Bun and Git
+ 2. Verify Claude Code is present
+-3. Prompt for your ElevenLabs API key (skippable — voice falls back to desktop notifications)
++3. Voice setup placeholder — local TTS engine pending (desktop notifications meanwhile)
+ 4. Launch a web-based wizard for DA identity and voice selection
+ 5. Set up the voice server and Pulse daemon
+ 6. Run validation
+diff --git a/Releases/v5.0.0/.claude/skills/Agents/AgentPersonalities.md b/Releases/v5.0.0/.claude/skills/Agents/AgentPersonalities.md
+--- a/Releases/v5.0.0/.claude/skills/Agents/AgentPersonalities.md
++++ b/Releases/v5.0.0/.claude/skills/Agents/AgentPersonalities.md
+@@ -16,7 +16,7 @@ PAI uses a **hybrid agent system** that combines:
+ | Scenario | Use | Why |
+ |----------|-----|-----|
+ | Recurring research | Named Agent (Remy, Ava) | Relationship continuity, known behavior |
+-| Voice output needed | Named Agent | Pre-mapped to ElevenLabs voices |
++| Voice output needed | Named Agent | Pre-mapped voice ids |
+ | Deep character interaction | Named Agent | Rich backstory, personality depth |
+ | One-off specialized task | Dynamic Agent | Perfect task-fit, no bloat |
+ | Novel trait combination | Dynamic Agent | Compose exactly what's needed |
+@@ -75,7 +75,7 @@ PAI uses a **hybrid agent system** that combines:
+ **What happens:**
+ 1. Run `bun run ~/.claude/skills/Agents/Tools/ComposeAgent.ts` for EACH agent
+ 2. Use DIFFERENT trait combinations to get unique voices AND colors
+-3. Each agent gets a personality-matched ElevenLabs voice and unique color
++3. Each agent gets a personality-matched voice id and unique color
+ 4. Launch with `subagent_type: "general-purpose"` - NEVER use static types
+ 
+ **Why this matters:**
+diff --git a/Releases/v5.0.0/.claude/skills/Agents/Data/Traits.yaml b/Releases/v5.0.0/.claude/skills/Agents/Data/Traits.yaml
+--- a/Releases/v5.0.0/.claude/skills/Agents/Data/Traits.yaml
++++ b/Releases/v5.0.0/.claude/skills/Agents/Data/Traits.yaml
+@@ -112,10 +112,10 @@ approach:
+       order. Document your process so others can follow your reasoning.
+ 
+ # ==============================================================================
+-# VOICE MAPPINGS - Complete ElevenLabs Premade Voice Registry
++# VOICE MAPPINGS - Legacy premade voice registry (vendor-era)
+ # ==============================================================================
+-# Voice IDs verified from ElevenLabs SDK documentation (2026-01)
+-# https://elevenlabs-sdk.mintlify.app/voices/premade-voices
++# Opaque voice ids kept for composition; the local TTS engine maps or
++# ignores them. No vendor account or key is involved (pai-nix).
+ #
+ # Extend/override in USER/SKILLCUSTOMIZATIONS/Agents/Traits.yaml
+ # ==============================================================================
+@@ -124,7 +124,7 @@ voice_mappings:
+   default_voice_id: "onwK4e9ZLuTAKqWW03F9"
+ 
+   # ============================================================================
+-  # COMPLETE VOICE REGISTRY - All ElevenLabs Premade Voices
++  # COMPLETE VOICE REGISTRY - Legacy premade voices (opaque ids)
+   # ============================================================================
+   voice_registry:
+     # --------------------------------------------------------------------------
+diff --git a/Releases/v5.0.0/.claude/skills/Agents/SKILL.md b/Releases/v5.0.0/.claude/skills/Agents/SKILL.md
+--- a/Releases/v5.0.0/.claude/skills/Agents/SKILL.md
++++ b/Releases/v5.0.0/.claude/skills/Agents/SKILL.md
+@@ -1,6 +1,6 @@
+ ---
+ name: Agents
+-description: "Compose CUSTOM agents from Base Traits + Voice + Specialization, and manage predefined functional TEAMS. Traits combine expertise (security, technical, research), personality (skeptical, analytical, enthusiastic), and approach (thorough, rapid, systematic). ComposeAgent.ts merges base + user config, outputs unique prompt + ElevenLabs voice + prosody. Predefined teams: engineering, architecture, marketing, design, security, research, content, strategy — each YAML-configured with roles, tensions, and specialist members. Observer team variant: read-only oversight agents that vote continue/halt/escalate against the tool-activity audit log (high-blast-radius or unattended runs only). USE WHEN create custom agents, spin up agents, specialized agents, agent personalities, available traits, list traits, agent voices, compose agent, spawn parallel agents, launch agents, engineering team, architecture team, marketing team, design team, security team, research team, content team, strategy team, get the team on this, observer team, audit agents. NOT FOR ad-hoc swarms or TeamCreate coordination (use Delegation). NOT FOR single-threaded delegation without unique identities (use Delegation Task)."
++description: "Compose CUSTOM agents from Base Traits + Voice + Specialization, and manage predefined functional TEAMS. Traits combine expertise (security, technical, research), personality (skeptical, analytical, enthusiastic), and approach (thorough, rapid, systematic). ComposeAgent.ts merges base + user config, outputs unique prompt + voice + prosody. Predefined teams: engineering, architecture, marketing, design, security, research, content, strategy — each YAML-configured with roles, tensions, and specialist members. Observer team variant: read-only oversight agents that vote continue/halt/escalate against the tool-activity audit log (high-blast-radius or unattended runs only). USE WHEN create custom agents, spin up agents, specialized agents, agent personalities, available traits, list traits, agent voices, compose agent, spawn parallel agents, launch agents, engineering team, architecture team, marketing team, design team, security team, research team, content team, strategy team, get the team on this, observer team, audit agents. NOT FOR ad-hoc swarms or TeamCreate coordination (use Delegation). NOT FOR single-threaded delegation without unique identities (use Delegation Task)."
+ effort: medium
+ ---
+ 
+@@ -70,7 +70,7 @@ Create your customizations at:
+ 
+ ## Voice Prosody Settings
+ 
+-Each voice can have prosody settings that control how it sounds. These are passed to ElevenLabs API.
++Each voice can have prosody settings that control how it sounds. The local TTS engine maps or ignores them (cloud TTS removed by pai-nix).
+ 
+ ### Prosody Parameters
+ 
+@@ -91,7 +91,7 @@ voice_mappings:
+   voice_registry:
+     # Add a new voice with full prosody settings
+     MyCustomVoice:
+-      voice_id: "your-elevenlabs-voice-id"
++      voice_id: "your-voice-id"
+       characteristics: ["energetic", "warm", "professional"]
+       description: "Custom voice for enthusiastic agents"
+       prosody:
+diff --git a/Releases/v5.0.0/.claude/skills/Agents/Templates/CUSTOMAGENTTEMPLATE.md b/Releases/v5.0.0/.claude/skills/Agents/Templates/CUSTOMAGENTTEMPLATE.md
+--- a/Releases/v5.0.0/.claude/skills/Agents/Templates/CUSTOMAGENTTEMPLATE.md
++++ b/Releases/v5.0.0/.claude/skills/Agents/Templates/CUSTOMAGENTTEMPLATE.md
+@@ -22,7 +22,7 @@ model: opus                 # opus | sonnet | haiku
+ color: ""                   # Hex color for terminal output (e.g., "#9B59B6")
+ 
+ # === Voice Profile (matches settings.json daidentity.voices schema) ===
+-voiceId: ""                 # ElevenLabs voice ID
++voiceId: ""                 # voice id (opaque; the local TTS engine maps it)
+ voice:
+   stability: 0.50           # 0.0-1.0 — Low = expressive/varied, High = consistent
+   similarity_boost: 0.75    # 0.0-1.0 — Voice identity preservation
+diff --git a/Releases/v5.0.0/.claude/skills/Prompting/Templates/Data/VoicePresets.yaml b/Releases/v5.0.0/.claude/skills/Prompting/Templates/Data/VoicePresets.yaml
+--- a/Releases/v5.0.0/.claude/skills/Prompting/Templates/Data/VoicePresets.yaml
++++ b/Releases/v5.0.0/.claude/skills/Prompting/Templates/Data/VoicePresets.yaml
+@@ -5,9 +5,9 @@
+ version: 1.0.0
+ last_updated: 2025-12-09
+ 
+-# Default ElevenLabs settings
++# Default TTS settings (legacy vendor-era shape; local engine maps or ignores)
+ defaults:
+-  model: eleven_turbo_v2_5
++  model: none  # vendor model id removed by pai-nix
+   default_rate_wpm: 175
+   volume: 0.80
+   output_format: mp3_44100_128
+diff --git a/Releases/v5.0.0/.claude/skills/Prompting/Templates/Primitives/Voice.hbs b/Releases/v5.0.0/.claude/skills/Prompting/Templates/Primitives/Voice.hbs
+--- a/Releases/v5.0.0/.claude/skills/Prompting/Templates/Primitives/Voice.hbs
++++ b/Releases/v5.0.0/.claude/skills/Prompting/Templates/Primitives/Voice.hbs
+@@ -4,7 +4,7 @@
+   Purpose: Generate voice configuration for agents and notifications.
+ 
+   Use Cases:
+-  - ElevenLabs voice settings
++  - TTS voice settings
+   - Agent personality calibration
+   - Notification type configuration
+   - Voice preset documentation
+diff --git a/Releases/v5.0.0/.claude/skills/Remotion/SKILL.md b/Releases/v5.0.0/.claude/skills/Remotion/SKILL.md
+--- a/Releases/v5.0.0/.claude/skills/Remotion/SKILL.md
++++ b/Releases/v5.0.0/.claude/skills/Remotion/SKILL.md
+@@ -1,6 +1,6 @@
+ ---
+ name: Remotion
+-description: "Creates programmatic video with React via Remotion — builds compositions, sequences, and motion graphics rendered to MP4. Uses useCurrentFrame() for all animation (no CSS animations). Integrates PAI_THEME constants from Theme.ts and Art skill aesthetic preferences for visual consistency. Render command: bunx remotion render {composition-id} ~/Downloads/{name}.mp4. Output always to ~/Downloads/ for preview first. Tools: Render.ts (render, list compositions, create projects) and Theme.ts (PAI theme constants derived from Art). Reference docs: ArtIntegration.md (theme constants, color mapping), Patterns.md (code examples, presets), CriticalRules.md (what not to do), Tools/Ref-*.md (31 pattern files covering core Remotion, Lambda, ElevenLabs captions, AI pipeline). Supports ElevenLabs captions, Lambda rendering, and AI pipeline integration. Rendering is CPU-intensive — use run_in_background. Two primary workflows: ContentToAnimation (animate existing content) and GeneratedContentVideo (AI content to video / make a short). USE WHEN: video, animation, motion graphics, video rendering, React video, render video, animate content, make a short, create animations, video overlay, explainer video, animated explainer, content to video, programmatic video. NOT FOR static images, diagrams, or illustrations (use Art). NOT FOR audio cleanup (use AudioEditor)."
++description: "Creates programmatic video with React via Remotion — builds compositions, sequences, and motion graphics rendered to MP4. Uses useCurrentFrame() for all animation (no CSS animations). Integrates PAI_THEME constants from Theme.ts and Art skill aesthetic preferences for visual consistency. Render command: bunx remotion render {composition-id} ~/Downloads/{name}.mp4. Output always to ~/Downloads/ for preview first. Tools: Render.ts (render, list compositions, create projects) and Theme.ts (PAI theme constants derived from Art). Reference docs: ArtIntegration.md (theme constants, color mapping), Patterns.md (code examples, presets), CriticalRules.md (what not to do), Tools/Ref-*.md (31 pattern files covering core Remotion, Lambda, captions, AI pipeline). Supports captions, Lambda rendering, and AI pipeline integration. Rendering is CPU-intensive — use run_in_background. Two primary workflows: ContentToAnimation (animate existing content) and GeneratedContentVideo (AI content to video / make a short). USE WHEN: video, animation, motion graphics, video rendering, React video, render video, animate content, make a short, create animations, video overlay, explainer video, animated explainer, content to video, programmatic video. NOT FOR static images, diagrams, or illustrations (use Art). NOT FOR audio cleanup (use AudioEditor)."
+ effort: medium
+ ---
+ 
+@@ -57,7 +57,7 @@ bunx remotion render {composition-id} ~/Downloads/{name}.mp4
+ - **Art integration:** `ArtIntegration.md` - theme constants, color mapping
+ - **Common patterns:** `Patterns.md` - code examples, presets
+ - **Critical rules:** `CriticalRules.md` - what NOT to do
+-- **Detailed reference:** `Tools/Ref-*.md` - 31 pattern files covering core Remotion + Lambda + ElevenLabs captions + AI pipeline
++- **Detailed reference:** `Tools/Ref-*.md` - 31 pattern files covering core Remotion + Lambda + captions + AI pipeline
+ 
+ ## Tools
+ 
+diff --git a/Releases/v5.0.0/.claude/skills/Remotion/Tools/Ref-ai-pipeline.md b/Releases/v5.0.0/.claude/skills/Remotion/Tools/Ref-ai-pipeline.md
+--- a/Releases/v5.0.0/.claude/skills/Remotion/Tools/Ref-ai-pipeline.md
++++ b/Releases/v5.0.0/.claude/skills/Remotion/Tools/Ref-ai-pipeline.md
+@@ -2,7 +2,7 @@
+ name: ai-pipeline
+ description: Combine AI image generation, TTS, and captions into a Remotion composition
+ metadata:
+-  tags: ai, pipeline, nano-banana, elevenlabs, generation, b-roll, content
++  tags: ai, pipeline, nano-banana, generation, b-roll, content
+ ---
+ 
+ # AI content → Remotion pipeline
+@@ -15,8 +15,8 @@ Generate all ingredients (scene images, narration audio, captions) with AI, then
+ Topic/Script
+     │
+     ├── Art skill (Nano Banana Pro / GPT-Image-1) ──► scene-N.png in /public
+-    ├── ElevenLabs TTS ───────────────────────────► narration.mp3 in /public
+-    └── ElevenLabs STT (on narration.mp3) ────────► Caption[]
++    ├── narration.mp3 (manual / local TTS) ───────► in /public
++    └── local Whisper STT (on narration.mp3) ─────► Caption[]
+             │
+             └── Remotion composition ──► MP4 via bunx remotion render
+ ```
+@@ -31,39 +31,17 @@ bun Tools/Art.ts generate --prompt "Cyberpunk city skyline at dusk, neon" \
+   --model nano-banana-pro --out public/scene-1.png
+ ```
+ 
+-## Step 2 — Generate narration (ElevenLabs TTS)
++## Step 2 — Narration (local TTS pending)
+ 
+-```tsx
+-import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+-import fs from 'node:fs';
+-
+-const client = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY });
+-
+-const audio = await client.textToSpeech.convert('VOICE_ID', {
+-  text: 'Your script here.',
+-  modelId: 'eleven_turbo_v2_5',
+-});
+-
+-fs.writeFileSync('public/narration.mp3', Buffer.from(await audio.arrayBuffer()));
+-```
+-
+-## Step 3 — Transcribe for captions
++The vendor TTS recipe was removed by pai-nix (self-hosted voice; no
++vendor keys in this install). Provide `public/narration.mp3` via a
++recording or local TTS until the local engine lands.
+ 
+-Feed the TTS output back through ElevenLabs STT to get word-level timings.
+-
+-```tsx
+-import { elevenLabsTranscriptToCaptions } from '@remotion/elevenlabs';
+-
+-const transcript = await client.speechToText.convert({
+-  file: fs.createReadStream('public/narration.mp3'),
+-  modelId: 'scribe_v1',
+-});
+-
+-const { captions } = elevenLabsTranscriptToCaptions({ transcript });
+-fs.writeFileSync('public/captions.json', JSON.stringify(captions));
+-```
++## Step 3 — Transcribe for captions (local Whisper)
+ 
+-See `Ref-elevenlabs-captions.md` for the caption pipeline details.
++Generate word-level timings locally (Whisper; see the AudioEditor
++skill) and write `public/captions.json` in the `@remotion/captions`
++Caption[] shape.
+ 
+ ## Step 4 — Compose
+ 
+@@ -122,7 +100,6 @@ The full pipeline is wrapped in `Workflows/GeneratedContentVideo.md` — invoke
+ 
+ ## Related references
+ 
+-- `Ref-elevenlabs-captions.md` — STT → Caption[] details
+ - `Ref-display-captions.md` — TikTok-style caption rendering
+ - `Ref-images.md` — `<Img>` component specifics
+ - `Ref-audio.md` — audio control (volume, trim, loop)
+diff --git a/Releases/v5.0.0/.claude/skills/Remotion/Tools/Ref-elevenlabs-captions.md b/Releases/v5.0.0/.claude/skills/Remotion/Tools/Ref-elevenlabs-captions.md
+deleted file mode 100644
+--- a/Releases/v5.0.0/.claude/skills/Remotion/Tools/Ref-elevenlabs-captions.md
++++ /dev/null
+@@ -1,57 +0,0 @@
+----
+-name: elevenlabs-captions
+-description: Convert ElevenLabs Speech-to-Text output into Remotion Caption objects
+-metadata:
+-  tags: elevenlabs, captions, stt, speech-to-text, transcription, scribe
+----
+-
+-# ElevenLabs captions
+-
+-`@remotion/elevenlabs` converts ElevenLabs Speech-to-Text (Scribe) output into the `Caption[]` format consumed by `@remotion/captions` (`createTikTokStyleCaptions`, etc.). Available from Remotion v4.0.443.
+-
+-## Install
+-
+-```bash
+-bunx remotion add @remotion/elevenlabs
+-bunx remotion add @remotion/captions
+-```
+-
+-## Flow
+-
+-1. Transcribe audio with the ElevenLabs STT API → raw `ElevenLabsTranscript` JSON
+-2. Convert to `Caption[]` with `elevenLabsTranscriptToCaptions()`
+-3. Render via `createTikTokStyleCaptions()` (see `Ref-display-captions.md`)
+-
+-## Minimal example
+-
+-```tsx
+-import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
+-import { elevenLabsTranscriptToCaptions } from '@remotion/elevenlabs';
+-import type { ElevenLabsTranscript } from '@remotion/elevenlabs';
+-import fs from 'node:fs';
+-
+-const client = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY });
+-
+-const transcript = (await client.speechToText.convert({
+-  file: fs.createReadStream('narration.mp3'),
+-  modelId: 'scribe_v1',
+-})) as ElevenLabsTranscript;
+-
+-const { captions } = elevenLabsTranscriptToCaptions({ transcript });
+-// captions: Caption[] — pass to createTikTokStyleCaptions()
+-```
+-
+-## When to use vs alternatives
+-
+-| Source | Cost | Speed | Best for |
+-|--------|------|-------|----------|
+-| `@remotion/elevenlabs` (Scribe API) | paid per minute | fast, cloud | already using ElevenLabs, want speaker labels |
+-| `@remotion/openai-whisper` | paid per minute | fast, cloud | highest quality, 57+ languages |
+-| `@remotion/install-whisper-cpp` | free | fast on server, needs setup | batch, self-hosted |
+-| `@remotion/whisper-web` | free | slow (WASM) | browser-only, no backend |
+-
+-## For already-known scripts
+-
+-If you generated the audio from a known script via ElevenLabs TTS, you don't need STT — use `@remotion/captions` directly with timed tokens. STT→captions is for audio where the script isn't authoritative (user uploads, podcasts, interviews).
+-
+-See also: `Ref-display-captions.md`, `Ref-transcribe-captions.md`.
+diff --git a/Releases/v5.0.0/.claude/skills/Remotion/Workflows/GeneratedContentVideo.md b/Releases/v5.0.0/.claude/skills/Remotion/Workflows/GeneratedContentVideo.md
+--- a/Releases/v5.0.0/.claude/skills/Remotion/Workflows/GeneratedContentVideo.md
++++ b/Releases/v5.0.0/.claude/skills/Remotion/Workflows/GeneratedContentVideo.md
+@@ -18,7 +18,7 @@ End-to-end AI video generation: topic or script → scene images + narration + c
+ 
+ ## Prerequisites
+ 
+-- `ELEVENLABS_API_KEY` in environment
++- narration source: manual recording or local TTS (no vendor keys — cloud TTS removed)
+ - Art skill configured (Nano Banana Pro or GPT-Image-1)
+ - Existing Remotion project OR this workflow will create one
+ 
+@@ -48,69 +48,22 @@ bun ~/.claude/skills/Art/Tools/Art.ts generate \
+ 
+ Launch 4-8 agents concurrently if scene count > 3.
+ 
+-### 4. Generate narration (ElevenLabs TTS)
++### 4. Narration (local TTS pending)
+ 
+-Use the voice the user has configured for DA narration. Save to `public/narration.mp3`.
++The vendor TTS/STT recipes were removed by pai-nix — the DA voice is
++self-hosted and no vendor keys exist in this install. Until the local
++TTS engine lands: provide `public/narration.mp3` yourself (recording
++or local TTS).
+ 
+-```tsx
+-const audio = await elevenlabs.textToSpeech.convert(VOICE_ID, {
+-  text: script,
+-  modelId: 'eleven_turbo_v2_5',
+-});
+-fs.writeFileSync('public/narration.mp3', Buffer.from(await audio.arrayBuffer()));
+-```
+-
+-### 5. Transcribe for captions (ElevenLabs STT)
+-
+-Feed the narration back through STT for word-level timing. See `Tools/Ref-elevenlabs-captions.md`.
+-
+-```tsx
+-const transcript = await elevenlabs.speechToText.convert({
+-  file: fs.createReadStream('public/narration.mp3'),
+-  modelId: 'scribe_v1',
+-});
+-const { captions } = elevenLabsTranscriptToCaptions({ transcript });
+-fs.writeFileSync('public/captions.json', JSON.stringify(captions));
+-```
+-
+-### 6. Compose
+-
+-Follow the pattern in `Tools/Ref-ai-pipeline.md`:
+-
+-- Scenes in sequenced `<Img>` fills
+-- `<Audio>` track with the narration
+-- TikTok-style captions via `createTikTokStyleCaptions()`
+-- PAI theme constants from `Tools/Theme.ts`
+-
+-Calculate `durationInFrames` from narration length: `audioDurationSec * fps`.
+-
+-### 7. Render
+-
+-Default to local:
+-
+-```bash
+-bunx remotion render GeneratedVideo ~/Downloads/video.mp4 --codec=h264
+-```
+-
+-For batch/production, use Lambda (see `Tools/Ref-lambda.md`).
+-
+-### 8. Preview
+-
+-Show the file path and play via `open` on macOS:
+-
+-```bash
+-open ~/Downloads/video.mp4
+-```
+-
+-## Output
++### 5. Transcribe for captions (local Whisper)
+ 
+-- `~/Downloads/<slug>.mp4` — final video
+-- Project kept in `~/LocalProjects/` for iteration (same location Remotion studio uses)
++Produce `public/captions.json` with a local Whisper transcription
++(see the AudioEditor skill's transcription tooling) and convert to the
++`@remotion/captions` Caption[] shape.
+ 
+ ## Related
+ 
+ - `Tools/Ref-ai-pipeline.md` — per-step technical reference
+-- `Tools/Ref-elevenlabs-captions.md` — caption pipeline
+ - `Tools/Ref-lambda.md` — cloud rendering
+ - `ArtIntegration.md` — theme + color integration
+ - `Workflows/ContentToAnimation.md` — the non-AI variant
