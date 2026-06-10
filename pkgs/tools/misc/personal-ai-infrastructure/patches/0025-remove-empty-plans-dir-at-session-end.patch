@@ -1,0 +1,134 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Wed, 10 Jun 2026 17:30:00 +0200
+Subject: [PATCH 25/25] Remove empty per-project Plans dir at session end
+ (rmdir-only)
+
+Upstream issue: (pai-nix — hygiene; no upstream issue.)
+
+The release settings.json ships `"plansDirectory": "Plans/"` — a
+RELATIVE path in a GLOBAL settings file. claude-code resolves it
+against each session's project root and creates the directory
+eagerly in its memoized path-resolver (`mkdirSync` on first resolve,
+verified in claude-code 2.1.170), even when plan mode is never used.
+Net result on a real machine: 64 `Plans/` directories across every
+project ever opened, 49 of them empty litter, 15 with real plans.
+
+Upstream offers no lazy-creation option and no disable value, and
+the eager mkdir lives inside the minified claude-code binary, where
+patching it would break on every claude-code update. So instead of
+preventing the creation, this patch makes SessionCleanup (already a
+SessionEnd hook) remove the directory at session end IF AND ONLY IF
+it is still empty:
+
+  - stdin parse now also captures `cwd` (standard hook input field;
+    if absent, the cleanup is skipped entirely — fail-safe is "do
+    nothing").
+  - after clearSessionWork(), a single `rmdirSync(join(cwd, 'Plans'))`
+    wrapped in try/catch.
+
+SAFETY CONTRACT (the reason this is rmdir and nothing else):
+rmdir(2) deletes ONLY an empty directory. Non-empty fails with
+ENOTEMPTY, missing with ENOENT, a symlink with ENOTDIR — it cannot
+recurse and does not follow links, so a project with real plan
+files keeps them by construction, not by logic that could regress.
+No rm, no rmSync, no recursive/force options anywhere. The catch
+block swallows all three errno cases and changes nothing.
+
+Known residual (accepted, rare): two concurrent sessions in the SAME
+project — one ends (removes the still-empty dir), the other later
+saves its first plan; whether that save re-creates the directory is
+claude-code's concern. Window requires concurrent same-project
+sessions AND first plan-mode use ordered after the other session's
+end.
+
+Behavioral effect: projects where plan mode is used keep their local
+Plans/ exactly as before; projects where it is not used stop
+accumulating empty directories (removed at each clean session end).
+Pre-existing empty dirs from before this patch disappear the next
+time a session in that project ends cleanly.
+
+Files touched (paths relative to upstream source root):
+
+  Releases/v5.0.0/.claude/hooks/SessionCleanup.hook.ts  (docstring,
+    fs import, stdin parse, post-clearSessionWork cleanup block)
+
+Total: 1 file, 5 hunks.
+
+Verification: substitutions applied against the hash-verified
+upstream v5.0.0 source (nix store FOD); `git apply --check` clean;
+functional matrix with synthetic SessionEnd stdin under isolated
+HOME/PAI_DIR: empty Plans/ removed, Plans/ with a file untouched
+(file intact), missing Plans/ exits 0, symlinked Plans/ untouched
+with target intact; `bun build --no-bundle` parses the patched file.
+Hunks generated via `diff -u` against the upstream v5.0.0 source
+tree.
+---
+ Releases/v5.0.0/.claude/hooks/SessionCleanup.hook.ts | 27 ++++++++++++++++++-
+ 1 file changed, 26 insertions(+), 1 deletion(-)
+
+diff --git a/Releases/v5.0.0/.claude/hooks/SessionCleanup.hook.ts b/Releases/v5.0.0/.claude/hooks/SessionCleanup.hook.ts
+--- a/Releases/v5.0.0/.claude/hooks/SessionCleanup.hook.ts
++++ b/Releases/v5.0.0/.claude/hooks/SessionCleanup.hook.ts
+@@ -23,6 +23,8 @@
+  * - Deletes: MEMORY/STATE/current-work.json (clears session state)
+  * - Resets: Kitty tab title and color to defaults
+  * - Cleans: session-names.json entry (prevents ghost entries)
++ * - Removes: <cwd>/Plans IF empty (plain rmdir semantics — never recursive,
++ *   never follows symlinks; projects with real plan files are untouched)
+  *
+  * INTER-HOOK RELATIONSHIPS:
+  * - COORDINATES WITH: WorkCompletionLearning (both run at SessionEnd)
+@@ -33,7 +35,7 @@
+  * - Typical execution: <50ms
+  */
+ 
+-import { writeFileSync, existsSync, readFileSync, unlinkSync } from 'fs';
++import { writeFileSync, existsSync, readFileSync, unlinkSync, rmdirSync } from 'fs';
+ import { join } from 'path';
+ import { getISOTimestamp } from './lib/time';
+ import { setTabState, cleanupKittySession } from './lib/tab-setter';
+@@ -181,6 +183,7 @@
+     // Read input from stdin with timeout — SessionEnd hooks may receive
+     // empty or slow stdin. Proceed regardless since state is read from disk.
+     let sessionId: string | undefined;
++    let cwd: string | undefined;
+     try {
+       const input = await Promise.race([
+         Bun.stdin.text(),
+@@ -189,6 +192,7 @@
+       if (input && input.trim()) {
+         const parsed = JSON.parse(input);
+         sessionId = parsed.session_id;
++        cwd = parsed.cwd;
+       }
+     } catch {
+       // Timeout or parse error — proceed without session_id
+@@ -197,6 +201,27 @@
+     // Mark work as complete and clear state
+     clearSessionWork(sessionId);
+ 
++    // Remove the per-project Plans/ directory claude-code eagerly creates at
++    // session start, IF it is still empty. The release settings.json ships
++    // plansDirectory: "Plans/" (relative), which the claude-code binary
++    // resolves against the project root and mkdirs on first path resolve —
++    // even when plan mode is never used. Net effect: unused Plans/ dirs
++    // vanish at session end; projects with real plan files keep theirs.
++    //
++    // SAFETY CONTRACT: rmdirSync with NO options is the entire mechanism.
++    // rmdir(2) only ever deletes an EMPTY directory — non-empty fails with
++    // ENOTEMPTY, missing with ENOENT, a symlink with ENOTDIR. It cannot
++    // recurse and does not follow links. Do NOT "improve" this with
++    // rm/rmSync/recursive — empty-only is the contract.
++    if (cwd) {
++      try {
++        rmdirSync(join(cwd, 'Plans'));
++        console.error('[SessionCleanup] Removed empty Plans/ directory');
++      } catch {
++        // ENOENT / ENOTEMPTY / ENOTDIR — leave everything exactly as-is.
++      }
++    }
++
+     // Reset Kitty tab to neutral styling — no lingering colored backgrounds
+     try {
+       setTabState({ title: '', state: 'idle', sessionId });
