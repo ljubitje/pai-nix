@@ -1,0 +1,74 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pai-nix <pai-nix@localhost>
+Date: Fri, 12 Jun 2026 13:20:00 +0200
+Subject: [PATCH 29/29] Fix Pulse ~90s shutdown hang on SIGTERM (graceful)
+
+Upstream issue: (pai-nix — local reliability fix; no upstream issue.)
+
+Diagnosis (2026-06-12): on system shutdown systemd sends SIGTERM to
+pai-pulse.service, then waits the full TimeoutStopSec (default 90s)
+before SIGKILL. Confirmed across boots -1/-2/-3 in journalctl
+("pai-pulse.service: State 'stop-sigterm' timed out. Killing."). This
+~90s was the dominant contributor to slow shutdowns.
+
+Root cause: PULSE/pulse.ts registers a SIGTERM handler, but the handler
+only sets `shuttingDown = true`. The main loop is usually parked in
+`await Bun.sleep(sleepMs)` (sleepMs scales up to MAX_SLEEP_MS while the
+scheduler waits for the next due job), and setting the flag does not
+interrupt that sleep. So the loop never re-evaluates `while
+(!shuttingDown)` in time, never reaches its cleanup, and never exits
+before the 90s SIGKILL.
+
+Fix (graceful, code-only — deliberately NOT a systemd TimeoutStopSec
+safety-net):
+  - shutdown() now calls wakeFromSleep() to interrupt the parked sleep.
+  - the main-loop sleep becomes an interruptible Promise (clearTimeout +
+    resolve on signal), so on SIGTERM/SIGINT the loop wakes immediately,
+    runs the existing cleanup (server.stop, module stops, writeState),
+    and returns.
+  - a final process.exit(0) after cleanup guarantees the runtime exits
+    promptly even if a module leaves a live handle.
+
+Result: shutdown completes in well under a second instead of ~90s.
+---
+diff --git a/Releases/v5.0.0/.claude/PAI/PULSE/pulse.ts b/Releases/v5.0.0/.claude/PAI/PULSE/pulse.ts
+--- a/Releases/v5.0.0/.claude/PAI/PULSE/pulse.ts
++++ b/Releases/v5.0.0/.claude/PAI/PULSE/pulse.ts
+@@ -321,11 +321,13 @@
+ 
+   // Graceful shutdown
+   let shuttingDown = false
++  let wakeFromSleep: () => void = () => {}
+   const isShuttingDown = () => shuttingDown
+   const shutdown = () => {
+     if (shuttingDown) return
+     shuttingDown = true
+     log("info", "Shutting down gracefully")
++    wakeFromSleep() // prekini dolg Bun.sleep v glavni zanki → cleanup steče takoj (sicer systemd čaka 90s TimeoutStopSec → SIGKILL)
+   }
+   process.on("SIGTERM", shutdown)
+   process.on("SIGINT", shutdown)
+@@ -531,7 +533,14 @@
+     const sleepMs = Math.max(MIN_SLEEP_MS, Math.min(nextDueMs - elapsed, MAX_SLEEP_MS))
+ 
+     if (!shuttingDown) {
+-      await Bun.sleep(sleepMs)
++      // prekinljiv sleep: SIGTERM/SIGINT zbudi takoj (sicer zanka visi do MAX_SLEEP_MS)
++      await new Promise<void>((resolve) => {
++        const timer = setTimeout(resolve, sleepMs)
++        wakeFromSleep = () => {
++          clearTimeout(timer)
++          resolve()
++        }
++      })
+     }
+   }
+ 
+@@ -543,6 +552,7 @@
+   if (syslogModule) await syslogModule.stop?.()
+   await writeState(STATE_PATH, state).catch(() => {})
+   log("info", "PAI Pulse stopped", { uptimeMs: Date.now() - state.startedAt })
++  process.exit(0) // po graceful cleanupu zagotovi izhod, tudi če kak modul pusti živ handle
+ }
+ 
+ main().catch((err) => {
