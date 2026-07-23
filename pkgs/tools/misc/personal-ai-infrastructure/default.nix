@@ -14,12 +14,15 @@
 }:
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "personal-ai-infrastructure";
-  version = "5.0.0";
+  version = "7.1.1";
+  # Upstream renamed PAI -> LifeOS. Pinned to main HEAD (a few docs/polish commits past the
+  # v7.1.1 tag a4e8e74) per Klemen's "7.1.1, iz main brancha"; full rev for a deterministic
+  # build (not the moving `main` ref). See ISA.md F1 / Decisions.
   src = fetchFromGitHub {
     owner = "danielmiessler";
-    repo = "Personal_AI_Infrastructure";
-    tag = "v${finalAttrs.version}";
-    hash = "sha256-PLNWzWnAzd2O4u+0vNxzfL1AAEbEtoovLB1/gk1Fzx4=";
+    repo = "LifeOS";
+    rev = "bc0a20aab97c185c6be53cf9290fa4544bf2c118";
+    hash = "sha256-xVjKBMGckwoh0sujDp2CKwo57Wr012WjLagvQ0CWOZA=";
   };
   patches = [
     ./patches/0001-skip-bun-management-on-nix.patch
