@@ -1,7 +1,7 @@
 # lifeos-nix — packages upstream LifeOS v7.1.1 as a Nix derivation.
 # Rebased from the v5.0.0 PAI packaging. Privacy-hardened + reproducible-vendored.
-# System of record: pai-nix/ISA.md. This build ships the vendored-deps skeleton + the
-# f2 deps-model patch; the F4 privacy patches (ElevenLabs / update-check) layer on next.
+# System of record: pai-nix/ISA.md. Privacy-hardened (F4: ElevenLabs + self-update egress
+# killed) on top of the vendored-deps skeleton + f2 deps-model patch.
 {
   lib,
   stdenvNoCC,
@@ -60,6 +60,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
   patches = [
     ./patches/f2-deploycore-skip-npm.patch       # RedTeam CR-3: stop runtime bun install (deps vendored+bridged)
+    ./patches/f4-a-neutralize-update-check.patch # f4-A: no external update-check (updates via Nix)
+    ./patches/f4-b-elevenlabs-killswitch.patch   # Klemen B: ElevenLabs egress dead regardless of key
   ];
 
   nativeBuildInputs = [ makeWrapper ];
