@@ -1,40 +1,40 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: pai-nix <pai-nix@localhost>
-Date: Fri, 12 Jun 2026 13:20:00 +0200
-Subject: [PATCH 29/29] Fix Pulse ~90s shutdown hang on SIGTERM (graceful)
+Subject: [PATCH] Fix Pulse shutdown hang on SIGTERM (graceful, interruptible sleep)
 
-Upstream issue: (pai-nix — local reliability fix; no upstream issue.)
+Re-cut for LifeOS 7.1.1 (was the v5.0.0 patch 0029). Upstream relocated the
+daemon: PAI/PULSE/pulse.ts -> LifeOS/install/LIFEOS/PULSE/pulse.ts, and the
+sleep cap changed (90s -> MAX_SLEEP_MS = 60_000). The entry point is pulse.ts:
+the systemd .service (ExecStart=bun run pulse.ts, TimeoutStopSec=5), the
+launchd .plist (ProgramArguments: bun run pulse.ts) and manage.sh all exec it.
 
-Diagnosis (2026-06-12): on system shutdown systemd sends SIGTERM to
-pai-pulse.service, then waits the full TimeoutStopSec (default 90s)
-before SIGKILL. Confirmed across boots -1/-2/-3 in journalctl
-("pai-pulse.service: State 'stop-sigterm' timed out. Killing."). This
-~90s was the dominant contributor to slow shutdowns.
+Problem: on shutdown, systemd/launchd sends SIGTERM. pulse.ts registers a
+SIGTERM handler, but it only sets `shuttingDown = true`. The main loop is
+normally parked in `await Bun.sleep(sleepMs)` (sleepMs up to MAX_SLEEP_MS =
+60_000ms), and setting the flag does not interrupt that sleep — the loop only
+re-checks `while (!shuttingDown)` once the sleep elapses. So the daemon hangs
+up to 60s; under systemd (TimeoutStopSec=5) it is SIGKILLed mid-operation,
+skipping writeState/cleanup.
 
-Root cause: PULSE/pulse.ts registers a SIGTERM handler, but the handler
-only sets `shuttingDown = true`. The main loop is usually parked in
-`await Bun.sleep(sleepMs)` (sleepMs scales up to MAX_SLEEP_MS while the
-scheduler waits for the next due job), and setting the flag does not
-interrupt that sleep. So the loop never re-evaluates `while
-(!shuttingDown)` in time, never reaches its cleanup, and never exits
-before the 90s SIGKILL.
+Root cause: the shutdown signal cannot wake a parked Bun.sleep.
 
-Fix (graceful, code-only — deliberately NOT a systemd TimeoutStopSec
-safety-net):
-  - shutdown() now calls wakeFromSleep() to interrupt the parked sleep.
+Fix (graceful, code-only — deliberately NOT a systemd TimeoutStopSec net):
+  - shutdown() calls wakeFromSleep() to interrupt the parked sleep.
   - the main-loop sleep becomes an interruptible Promise (clearTimeout +
-    resolve on signal), so on SIGTERM/SIGINT the loop wakes immediately,
-    runs the existing cleanup (server.stop, module stops, writeState),
-    and returns.
-  - a final process.exit(0) after cleanup guarantees the runtime exits
-    promptly even if a module leaves a live handle.
+    resolve on signal) so on SIGTERM/SIGINT the loop wakes immediately, runs
+    the existing cleanup (server.stop, module stops, writeState) and returns.
+  - a final process.exit(0) after cleanup guarantees prompt exit even if a
+    module leaves a live handle.
 
-Result: shutdown completes in well under a second instead of ~90s.
----
-diff --git a/Releases/v5.0.0/.claude/PAI/PULSE/pulse.ts b/Releases/v5.0.0/.claude/PAI/PULSE/pulse.ts
---- a/Releases/v5.0.0/.claude/PAI/PULSE/pulse.ts
-+++ b/Releases/v5.0.0/.claude/PAI/PULSE/pulse.ts
-@@ -321,11 +321,13 @@
+Result: shutdown completes in well under a second, cleanly, instead of a
+60s hang / mid-operation SIGKILL.
+
+Scope: touches only pulse.ts (the file that actually runs). The unreferenced
+pulse-unified.ts / pulse-old.ts variants are left untouched (dead code — no
+.service/.plist/manage.sh/test execs them).
+
+Generated via `diff -u` against pristine 7.1.1 src (never hand-counted hunks).
+--- a/LifeOS/install/LIFEOS/PULSE/pulse.ts
++++ b/LifeOS/install/LIFEOS/PULSE/pulse.ts
+@@ -542,11 +542,13 @@
  
    // Graceful shutdown
    let shuttingDown = false
@@ -44,16 +44,16 @@ diff --git a/Releases/v5.0.0/.claude/PAI/PULSE/pulse.ts b/Releases/v5.0.0/.claud
      if (shuttingDown) return
      shuttingDown = true
      log("info", "Shutting down gracefully")
-+    wakeFromSleep() // prekini dolg Bun.sleep v glavni zanki → cleanup steče takoj (sicer systemd čaka 90s TimeoutStopSec → SIGKILL)
++    wakeFromSleep() // interrupt the long Bun.sleep in the main loop so cleanup runs at once (else systemd waits TimeoutStopSec then SIGKILLs)
    }
    process.on("SIGTERM", shutdown)
    process.on("SIGINT", shutdown)
-@@ -531,7 +533,14 @@
+@@ -956,7 +958,14 @@
      const sleepMs = Math.max(MIN_SLEEP_MS, Math.min(nextDueMs - elapsed, MAX_SLEEP_MS))
  
      if (!shuttingDown) {
 -      await Bun.sleep(sleepMs)
-+      // prekinljiv sleep: SIGTERM/SIGINT zbudi takoj (sicer zanka visi do MAX_SLEEP_MS)
++      // interruptible sleep: SIGTERM/SIGINT wakes it immediately (else the loop parks up to MAX_SLEEP_MS)
 +      await new Promise<void>((resolve) => {
 +        const timer = setTimeout(resolve, sleepMs)
 +        wakeFromSleep = () => {
@@ -64,11 +64,11 @@ diff --git a/Releases/v5.0.0/.claude/PAI/PULSE/pulse.ts b/Releases/v5.0.0/.claud
      }
    }
  
-@@ -543,6 +552,7 @@
+@@ -968,6 +977,7 @@
    if (syslogModule) await syslogModule.stop?.()
    await writeState(STATE_PATH, state).catch(() => {})
-   log("info", "PAI Pulse stopped", { uptimeMs: Date.now() - state.startedAt })
-+  process.exit(0) // po graceful cleanupu zagotovi izhod, tudi če kak modul pusti živ handle
+   log("info", "LifeOS Pulse stopped", { uptimeMs: Date.now() - state.startedAt })
++  process.exit(0) // after graceful cleanup, guarantee exit even if a module leaves a live handle
  }
  
  main().catch((err) => {
