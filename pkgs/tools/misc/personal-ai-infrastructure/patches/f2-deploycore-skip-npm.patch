@@ -1,3 +1,24 @@
+lifeos-nix patch f2 — Skip runtime `bun install` in DeployCore (deps are Nix-vendored)
+
+PROBLEM
+  `LifeOS/Tools/DeployCore.ts` runs `bun install` in configRoot at activation time,
+  reaching the npm registry from a user machine at first launch (RedTeam CR-3).
+
+ROOT CAUSE
+  Upstream's AI-native install assumes deps are fetched at activation; Nix packaging
+  requires all deps resolved at build time (fixed-output derivations, offline).
+
+SCOPE
+  Touches only DeployCore.ts. All five node_modules trees are vendored into the store
+  by the derivation and bridged into configRoot by the `lifeos` launcher, so the
+  runtime install step is dead weight + an egress hole; replaced with a no-op action.
+
+VERIFICATION
+  ISC-133 egress test: full DeployCore activation chain in a deny-all rootless netns
+  with strace — zero external connect() attempts, activation exit 0. Build green.
+
+Generated via `diff -u` against pristine 7.1.1 src.
+
 --- a/LifeOS/Tools/DeployCore.ts
 +++ b/LifeOS/Tools/DeployCore.ts
 @@ -153,13 +153,11 @@
