@@ -1,0 +1,61 @@
+lifeos-nix patch f4-c — Ship PULSE.toml with the default-ACTIVE egress-capable modules off
+
+PROBLEM
+  RedTeam EGRESS gap (a): the shipped PULSE.toml sets three entries `enabled = true` that
+  are default-ACTIVE (module loaded / job scheduled) rather than merely dispatch targets:
+    - [voice]                     → VoiceServer module (cloud TTS path; already hard-killed
+                                    by f4-b, but the module still starts by default)
+    - [telegram]                  → Telegram bot module
+    - [[job]] life-morning-brief  → 7am job, output=voice
+  Every other external in the template is dispatch/target code that is env/cred-gated before
+  the socket (verified: lib.ts dispatchSingle — telegram/email/ntfy all skip without their
+  env var; airgradient-poll main() returns before fetch when AIRGRADIENT_TOKEN unset;
+  work/calendar/github config-gated). Those are inert with no creds. The three ACTIVE ones
+  are the gap: they load/run on a fresh install, so the point-1 invariant (default background
+  egress ⊆ {Anthropic}) should not depend on "no cred happens to be set."
+
+WHY THE FLIP SUFFICES (loader gates — pulse-unified.ts / pulse.ts)
+  - voice:   started only `if (config.voice?.enabled !== false)`  → false ⇒ module never imported/started.
+  - telegram:started only `if (config.telegram?.enabled)`         → false ⇒ module never imported/started.
+  - job:     scheduler does `if (!job.enabled) continue`          → false ⇒ life-morning-brief never scheduled/run.
+  The flag is load-bearing; enabled=false makes the egress code unreachable, not merely unused.
+
+FIX
+  Flip the three shipped defaults to `enabled = false`. This is the system-tier template;
+  a user re-enables per-module via LIFEOS/USER/CONFIG/PULSE.user.toml (merged by name,
+  user-tier wins) — so opt-in is one line, default is inert. observability/hooks/performance
+  stay on (local-only: localhost:31337 dashboard + local processing).
+
+SCOPE / CO-EXISTENCE
+  One file, three one-line flips. Orthogonal to f4-a (lifeos.ts) and f4-b (voice/telegram/
+  Doctor source). Complements f4-b: f4-b kills the ElevenLabs call in-code; f4-c stops the
+  modules from being default-active at all.
+
+VERIFICATION
+  Hunks via `diff -u`; `patch -p1 --dry-run` clean; built PULSE.toml shows the three
+  `enabled = false`. No behavioral egress reachable at idle with no creds.
+
+--- a/LifeOS/install/LIFEOS/PULSE/PULSE.toml
++++ b/LifeOS/install/LIFEOS/PULSE/PULSE.toml
+@@ -11,10 +11,10 @@
+ # ── Module Configuration ──
+ 
+ [voice]
+-enabled = true
++enabled = false  # lifeos-nix: default-off (privacy point-1); opt-in via PULSE.user.toml
+ 
+ [telegram]
+-enabled = true
++enabled = false  # lifeos-nix: default-off (privacy point-1); opt-in via PULSE.user.toml
+ # Spoken summary of each text reply as a Telegram voice note (PR #1458, author anikin-xyz).
+ # Requires ELEVENLABS_API_KEY. Set false to keep text replies but suppress voice notes.
+ voice_summaries = true
+@@ -191,7 +191,7 @@
+ type = "script"
+ command = "bun run checks/life-morning-brief.ts"
+ output = "voice"
+-enabled = true
++enabled = false  # lifeos-nix: default-off (privacy point-1); opt-in via PULSE.user.toml
+ 
+ # ── Migration note (2026-05-03) ──
+ # All personal/{{PRINCIPAL_NAME}}-specific jobs (cost-tracker, monitor-*, lifelog-digest,

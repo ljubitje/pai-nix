@@ -62,6 +62,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f2-deploycore-skip-npm.patch       # RedTeam CR-3: stop runtime bun install (deps vendored+bridged)
     ./patches/f4-a-neutralize-update-check.patch # f4-A: no external update-check (updates via Nix)
     ./patches/f4-b-elevenlabs-killswitch.patch   # Klemen B: ElevenLabs egress dead regardless of key
+    ./patches/f4-c-pulse-disable-default-active.patch # RedTeam (a): voice/telegram/morning-brief default-off
   ];
 
   nativeBuildInputs = [ makeWrapper ];
