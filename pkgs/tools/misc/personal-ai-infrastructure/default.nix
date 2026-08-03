@@ -122,12 +122,20 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       bun "$SKILL/Tools/DeployCore.ts"      --skill-root "$SKILL" --config-root "$CFG" --apply
       bun "$SKILL/Tools/ScaffoldUser.ts"    --skill-root "$SKILL" --config-root "$CFG" --apply
       bun "$SKILL/Tools/LinkUser.ts"        --skill-root "$SKILL" --config-root "$CFG" --apply
-      [ -e "$CFG/CLAUDE.md" ] || cp "$SKILL/install/CLAUDE.template.md" "$CFG/CLAUDE.md"
+      [ -e "$CFG/CLAUDE.md" ] || install -m 0644 "$SKILL/install/CLAUDE.template.md" "$CFG/CLAUDE.md"
       bun "$SKILL/Tools/InstallSettings.ts" --skill-root "$SKILL" --config-root "$CFG" --apply
       bun "$SKILL/Tools/InstallHooks.ts"    --skill-root "$SKILL" --config-root "$CFG" --apply
       bun "$SKILL/Tools/ActivateImports.ts" --skill-root "$SKILL" --config-root "$CFG" --apply
       bridge_node_modules
       bun "$SKILL/Tools/DeployComponents.ts" --config-root "$CFG" --components statusline,tooltips,spinnerverbs,agents,commands --apply || true
+      # Files copied out of the store keep its read-only 444 mode; BOTH write targets —
+      # the config-root and the XDG user-config dir ScaffoldUser populates (95 files incl.
+      # LIFEOS_CONFIG.toml + CREDENTIALS) — must be user-writable, or config edits and
+      # ActivateImports' CLAUDE.md rewrite EACCES. chmod -R ignores symlinks, so the
+      # store node_modules bridges stay untouched.
+      USERCFG="''${LIFEOS_CONFIG_DIR:-$HOME/.config/LIFEOS}"
+      chmod -R u+w "$CFG"
+      [ -d "$USERCFG" ] && chmod -R u+w "$USERCFG" || true
       bash "$CFG/LIFEOS/PULSE/manage.sh" install || true
       bun "$CFG/LIFEOS/TOOLS/Doctor.ts" decline voice      || true
       bun "$CFG/LIFEOS/TOOLS/Doctor.ts" decline cloudflare  || true
