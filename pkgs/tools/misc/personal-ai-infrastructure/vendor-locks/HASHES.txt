@@ -1,0 +1,22 @@
+# Vendored node_modules FOD hashes (x86_64-linux) — from-scratch reproducibility-VERIFIED 2026-08-03.
+# These are the values default.nix pins. Recipe per tree:
+#   bun install --frozen-lockfile --ignore-scripts  (HOME=$TMPDIR, NEXT_TELEMETRY_DISABLED=1)
+# Locks: root/tools/tokenxray from committed vendor-locks/*.bun.lock; pulse/obs from their own
+# bun.lock in src.
+#
+# VERIFICATION (fake-hash probe, 2026-08-03): each FOD was forced to rebuild from scratch by
+# pinning a wrong outputHash, so nix reports the real `got:` hash. tools/obs/tokenxray each
+# reproduced their default.nix pin on a fresh build; pulse reproduced 2zjz… on TWO independent
+# from-scratch builds (deterministic).
+#
+# ⚠️ CORRECTION vs the prior 2026-08-02 capture: that file was stale for 4/5 trees (superseded by
+# later lock/pin finalization the same day, never refreshed). Most of it was cosmetic — default.nix
+# already held the correct tools/obs/tokenxray values — BUT the `pulse` pin in default.nix itself was
+# stale (COp+w/bvl2kpokCVZs+WudN4jf9yzEdmUB6ozq6a+Qw=). The old green build only passed because a stale
+# pulse FOD was still cached; a cold-cache (from-scratch) build would have FAILED the pulse hash.
+# default.nix pulse is now corrected to the reproducible 2zjz… value.
+root       sha256-PAJAbFNw7jFdQDuguSUfNOFRGJzL49P05r1fZEoiO3c=
+tools      sha256-FIBTFDHuFW6WyDSlNXr6QMi76eaFLaxKZgKwNMay5/E=
+pulse      sha256-2zjzLOg6UPkQa86IMj+OPiB69IQOHZhuhtuZPanKU+o=
+obs        sha256-dzvmq20UIVDwc9Ui0nrPzckwIH9zT5pADgYaeTI/aRk=
+tokenxray  sha256-VZFZ8RyMavdtBaUnkswSlv2tBcPEteCO5EOqb60HJlI=

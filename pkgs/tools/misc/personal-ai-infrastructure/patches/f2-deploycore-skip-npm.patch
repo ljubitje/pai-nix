@@ -1,0 +1,20 @@
+--- a/LifeOS/Tools/DeployCore.ts
++++ b/LifeOS/Tools/DeployCore.ts
+@@ -153,13 +153,11 @@
+   const { copied, failures } = copyMissing(src, dst);
+   r.copied = copied;
+   r.failures = failures;
++  // lifeos-nix: runtime `bun install` removed. node_modules are vendored into the Nix
++  // store (fixed-output, reproducible) and symlinked into configRoot by the `lifeos`
++  // launcher — so the install stays fully offline and never touches the npm registry.
+   if (failures.length === 0) {
+-    const proc = Bun.spawnSync(["bun", "install"], { cwd: configRoot, stdout: "pipe", stderr: "pipe" });
+-    if (proc.exitCode !== 0) {
+-      r.failures.push(`bun install --cwd ${configRoot} exited ${proc.exitCode}: ${proc.stderr.toString().trim()}`);
+-    } else {
+-      r.actions.push(`bun install --cwd ${configRoot}`);
+-    }
++    r.actions.push("bun install skipped (Nix-vendored node_modules bridged by launcher)");
+   }
+   return r;
+ }
