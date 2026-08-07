@@ -31,7 +31,7 @@ check(){ if [ "$1" -eq 0 ]; then ok "$2"; else fail "$2"; fi; }
 
 echo "== F5 settings/hooks/toml test =="
 echo "-- building package --"
-OUT="$(nix build "$REPO#personal-ai-infrastructure" --print-out-paths --no-link 2>/dev/null | tail -1)"
+OUT="$(nix build "$REPO#lifeos" --print-out-paths --no-link 2>/dev/null | tail -1)"
 [ -n "$OUT" ] || { echo "FAIL: build produced no out path"; exit 2; }
 SKILL="$OUT/share/lifeos/LifeOS"
 BUN_BIN="$(grep -oE '/nix/store/[^:"]*-bun-[^/"]*/bin' "$OUT/bin/lifeos" | head -1)"
