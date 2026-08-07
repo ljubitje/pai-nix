@@ -1,5 +1,5 @@
 {
-  description = "Personal AI Infrastructure (PAI)";
+  description = "lifeos-nix — LifeOS (the Life Operating System) packaged for Nix, privacy-hardened and reproducible";
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";

@@ -1,8 +1,10 @@
-# pai-nix
+# lifeos-nix
 
-Nix packaging of [Personal AI Infrastructure (PAI)](https://github.com/danielmiessler/Personal_AI_Infrastructure) — Daniel Miessler's Life Operating System for Claude Code — with the patches and build hygiene needed to make it run cleanly on NixOS and other case-sensitive Linux filesystems.
+Nix packaging of [LifeOS](https://github.com/danielmiessler/LifeOS) — Daniel Miessler's Life Operating System for Claude Code — turned into a deterministic, privacy-hardened Nix derivation with an immutable store path and no shell-rc mutation.
 
-PAI ships with a macOS-first installer (`bash install.sh`) that assumes a writable `~/.claude`, expects to mutate the user's shell rc files, and was authored against a case-insensitive filesystem. pai-nix turns it into a proper Nix derivation: deterministic builds, an immutable store path, no rc-file mutation, and patches for the upstream bugs that surface only on Linux or only when the installer is sandboxed.
+Upstream ships as an AI-native, skill-only distribution installed by a chain of `bun` TypeScript tools driven by `INSTALL.md`, assuming a writable `~/.claude` and network access at install time. lifeos-nix wraps that into a proper derivation: the skill+runtime payload is store-copied, every npm dependency tree is vendored as a fixed-output derivation (reproducible, offline), a small patch set neutralizes default background egress, and a `lifeos` launcher on `PATH` drives the upstream installer in user space — no `/etc`, `~/.zshrc`, or `~/.bashrc` writes.
+
+> **Rebased from the earlier v5.0.0 PAI packaging.** Upstream renamed PAI → LifeOS and shipped v7.1.1 ("The Bitter Pill" reorg): skill-only distribution, `PAI/` → `LIFEOS/`, config `yaml` → `toml`. The 29 v5.0.0-era patches were retired after a full triage against 7.1.1 (most fixed upstream or made obsolete); the current set is five load-bearing patches. History: `ISA.md` (local system of record).
 
 ---
 
@@ -13,123 +15,98 @@ PAI ships with a macOS-first installer (`bash install.sh`) that assumes a writab
 ```nix
 # flake.nix of your system config
 {
-  inputs.pai-nix.url = "git+https://codeberg.org/ljubitje/pai-nix";
+  # NOTE: the codeberg repo rename pai-nix → lifeos-nix is pending; this URL is live today.
+  inputs.lifeos-nix.url = "git+https://codeberg.org/ljubitje/pai-nix";
 
-  outputs = { self, nixpkgs, pai-nix, ... }: {
+  outputs = { self, nixpkgs, lifeos-nix, ... }: {
     nixosConfigurations.<host> = nixpkgs.lib.nixosSystem {
       modules = [
-        ({ pkgs, ... }: {
-          environment.systemPackages = [ pai-nix.packages.${pkgs.system}.default ];
-        })
+        lifeos-nix.nixosModules.lifeos   # `nixosModules.pai` is kept as a compat alias
       ];
     };
   };
 }
 ```
 
-Then `nixos-rebuild switch` and `pai --force-install` once to drop `~/.claude` into your home.
+`nixosModules.lifeos` adds the package to `environment.systemPackages`. Then run the `lifeos` launcher once — on a fresh `~/.claude` it installs the LifeOS payload; on an existing pre-7.x PAI/LifeOS tree it **refuses** (freeze-guard) rather than clobber it.
 
 ### `nix profile` (any flake-aware Nix)
 
 ```bash
-nix profile install git+https://codeberg.org/ljubitje/pai-nix
-pai --force-install
+nix profile install git+https://codeberg.org/ljubitje/pai-nix#lifeos
+lifeos          # first run installs into ~/.claude, then launches Claude Code with the LifeOS system prompt
 ```
 
 ### Try it ephemerally
 
 ```bash
-nix run git+https://codeberg.org/ljubitje/pai-nix -- --force-install
+nix run git+https://codeberg.org/ljubitje/pai-nix#lifeos
 ```
 
 ---
 
 ## What's inside
 
-- **PAI v5.0.0** — fetched as a fixed source tarball at build time (Daniel Miessler's upstream).
-- **21 patches** layered on top, each addressing a specific upstream bug, a Nix-install integration concern, or a Linux-specific incompatibility.
-- **A wrapper script** that runs the upstream installer in user space without touching `/etc`, `~/.zshrc`, or `~/.bashrc`. PATH inherits Nix-store binaries (bun, nodejs, git, curl, jq, claude-code).
+- **LifeOS v7.1.1** — fetched from `danielmiessler/LifeOS` at a pinned rev (`bc0a20a`) as a fixed source, hash-locked.
+- **Reproducible vendored dependencies** — one fixed-output derivation per `package.json` tree (root, TOOLS, PULSE, PULSE/Observability, TOOLS/TokenXray), built with `--frozen-lockfile --ignore-scripts` and `NEXT_TELEMETRY_DISABLED=1`. No runtime `bun install`, no postinstall beacons. Hashes captured for `x86_64-linux` (`vendor-locks/HASHES.txt`), from-scratch reproducibility verified.
+- **A five-patch set** (see below) — privacy kills + a graceful-shutdown fix.
+- **The `lifeos` launcher** on `PATH` — drives the upstream installer offline/additively, then `exec`s Claude Code with `LIFEOS_SYSTEM_PROMPT.md`. No rc-file mutation, no shell alias. Includes a freeze-guard that refuses to run against a pre-7.x config root.
 
 ### Patches
 
-Each patch is a numbered, additive `.patch` file with a multi-paragraph header explaining the bug, RCA, fix scope, verification evidence, and co-existence with prior patches. Hunks are always generated via `diff -u` against the extracted upstream tarball or the post-prior-patches state — never hand-counted (lesson learned the hard way at patch 0005).
+Each patch is a numbered, additive `.patch` with a multi-paragraph header (bug, RCA, fix scope, verification). Hunks are always generated via `diff -u` against the extracted upstream source — never hand-counted.
 
-| #     | Patch                                       | Upstream                                                                                                  |
-| ----- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| 0001  | Skip bun management on Nix-built installs   | (Nix-specific, applies to any Nix install — NixOS, Nix-on-Ubuntu, Nix-on-macOS)                          |
-| 0002  | Linux support for Pulse daemon              | (Linux-specific, all distros)                                                                             |
-| 0003  | Pulse `package.json` for dependency resolution | (Nix-specific bring-up; patch 0019 extends benefit to upstream installer)                              |
-| 0004  | Nix installer fixes (any Nix-built install) | (Nix-specific, applies to any Nix install)                                                                |
-| 0005  | Fix Nix-install runtime gate (NIX_STORE → PAI_NIX_INSTALL) | (Nix-specific — `process.env.NIX_STORE` is build-time-only)                            |
-| 0006  | Pulse case-sensitive path construction      | [#1146](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1146) (Pulse subset)         |
-| 0007  | Prompt classifier slash-prefix              | [#1158](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1158)                         |
-| 0008  | Installer `paiDir` misnaming                | [#1121](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1121)                         |
-| 0009  | Remaining mixed-case path bugs (TOOLS, ALGORITHM) | [#1146](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1146) (supplement)      |
-| 0010  | Installer `${HOME}` literal expansion       | [#1124](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1124)                         |
-| 0011  | `PAI_SYSTEM_PROMPT.md` placeholder substitution | [#1135](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1135)                     |
-| 0012  | Register ISASync / CheckpointPerISC / ToolFailureTracker hooks | [#1134](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1134)      |
-| 0013  | `GenerateTelosSummary.ts` parser bugs       | [#1140](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1140)                         |
-| 0014  | RepeatDetection state-save timing           | [#1155](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1155) / PR [#1156](https://github.com/danielmiessler/Personal_AI_Infrastructure/pull/1156) |
-| 0015  | Root `package.json` for runtime deps        | [#1139](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1139)                         |
-| 0016  | `PAI_STATE.json` producer for statusline    | [#1132](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1132)                         |
-| 0017  | Migrate observability to `/interview` TELOS schema | [#1153](https://github.com/danielmiessler/Personal_AI_Infrastructure/issues/1153)                  |
-| 0018  | Emit step_skip event for every Telegram skip path | (upstream — TBD issue)                                                                          |
-| 0019  | Install Pulse deps before invoking manage.sh | (upstream — TBD issue, applies to every platform)                                                    |
-| 0020  | Clear `.pai-installing` at install_complete moment | (Nix-only — `.pai-installing` is a pai-nix wrapper concept; gated on `PAI_NIX_INSTALL=1`)      |
-| 0021  | systemd user unit for Pulse on Linux (launchd parity) | (Linux-specific, applicable to all distros with systemd-user)                                  |
-| 0022  | Privacy: drop cloudflare-kv observability target from default config | (pai-nix privacy series — local-only default; no upstream issue)                   |
-| 0023  | Perf: run KVSync boundary push detached (stop blocking session close) | (pai-nix perf — preserves local sync, removes blocking wait; no upstream issue)   |
-| 0024  | Perf: run UpdateCounts refresh detached (stop blocking session close) | (pai-nix perf — preserves counts pre-warm, removes blocking wait; no upstream issue) |
+| Patch                                    | Purpose                                                                                          |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `f2-deploycore-skip-npm`                 | Stop the runtime `bun install` — dependencies are vendored and bridged in from the store.        |
+| `f4-a-neutralize-update-check`           | Kill the external self-update check (updates come via Nix, not a phone-home).                    |
+| `f4-b-elevenlabs-killswitch`             | ElevenLabs egress dead regardless of any configured key (local TTS seam preserved).              |
+| `f4-c-pulse-disable-default-active`      | Ship `PULSE.toml` with the default-active egress modules (voice/telegram/morning-brief) off.     |
+| `0029-fix-pulse-graceful-shutdown-on-sigterm` | Pulse exits cleanly on `SIGTERM` (no 60 s hang, no mid-`writeState` `SIGKILL`).             |
+
+---
+
+## Privacy invariant
+
+**No default background egress beyond Anthropic.** This is the load-bearing property of the packaging and it is enforced by a test, not just a config default: `tests/egress-test.sh` activates the built payload inside a rootless deny-all network namespace under `strace -e network` (with a positive control) and asserts zero external `connect()`s across activation, the job/check scripts, and Pulse boot. The privacy patches (`f4-*`) are belt-and-suspenders on top of that proof.
+
+`tests/settings-merge-test.sh` covers the install semantics: a virgin install, a merge that never clobbers pre-existing user values, and idempotent re-installs.
 
 ---
 
 ## Design principles
 
-- **Transparency over runtime patching.** Every modification to upstream is an auditable `.patch` file. No runtime `sed` hacks. Build-time `find -exec rm` mutations are documented inline in `default.nix`.
-- **Match upstream conventions.** Patches use git format-patch headers, `diff --git a/Releases/v5.0.0/.claude/...` paths, multi-paragraph explanatory comments, and file/line manifests.
-- **Co-existence verified.** Where multiple patches touch the same file (e.g. five patches touch `actions.ts`), each patch header documents the line ranges and confirms non-overlapping hunks.
-- **Don't touch the macOS path.** Every Linux-specific fix is gated or platform-agnostic. macOS users see the same patches as a no-op (case-insensitive filesystem makes mixed-case paths resolve identically to caps).
-- **Live verification where possible.** Patch headers include synthetic tests, build-output greps, and (for runtime-affecting patches) live API/process probes.
+- **Transparency over runtime patching.** Every upstream modification is an auditable `.patch`. Build-time mutations are documented inline in `default.nix`.
+- **Privacy is a test, not a hope.** The egress invariant is asserted against the *built tree*, not the live install.
+- **Reproducible, offline, hermetic.** No network at build time beyond the hash-locked source and vendored FOD trees; `--ignore-scripts` keeps postinstall beacons out of the hash.
+- **Brand ≠ path.** The rename touches branding and flake outputs only — the config root stays `~/.claude` because Claude Code hardcodes it.
+- **Backward-compatible outputs.** `packages.personal-ai-infrastructure` and `nixosModules.pai` are kept as compat aliases so pinned downstream flakes keep resolving across the rename.
 
 ---
 
 ## Status
 
-**Working.** `nix build` exit 0, all 24 patches apply cleanly, Pulse daemon reaches `localhost:31337/healthz`, dashboard renders at `/`, `/agents`, `/work`, `/telos`, `/health`, `/security`. Validator reports zero false-failures on a clean install. On Linux + systemd, Pulse auto-starts on login and restarts on crash via the systemd user unit installed by patch 0021 (parity with the macOS launchd plist).
+**Build green + from-scratch reproducible.** Privacy invariant **proven** by `tests/egress-test.sh`; install semantics covered by `tests/settings-merge-test.sh` (23/23). Both `packages.lifeos` and the `packages.personal-ai-infrastructure` alias build to the same store path; `nixosModules.{lifeos,pai}` both evaluate.
 
-**Caveats:**
-
-- `pai --force-install` opens an Electron GUI installer (port 1337). The CLI installer path is gated behind it; some interactive prompts are not yet automatable.
-- The `/algorithm` dashboard route returns 404 — `algorithm.html` is genuinely absent from upstream's `next export` output (content gap, not a path bug). Documented in patch 0017's header.
-- Cron jobs require network at user-install time for `bun install` to fetch deps. If the install is run offline, runtime cron jobs may error until `bun install` is re-run with network.
+**Pending (F7 sandbox smoke):** a full end-to-end smoke in a scratch `HOME` — Pulse reaching `localhost:31337/healthz` and Claude Code launching from the `lifeos` wrapper — is not yet run. Those two probes are the remaining live-verification owed before the packaging is called done.
 
 ---
 
 ## Repository structure
 
 ```
-pai-nix/
-├── flake.nix                       # Top-level flake (default + dev shell)
-├── pkgs/tools/misc/personal-ai-infrastructure/
-│   ├── default.nix                 # The Nix derivation + wrapper script
-│   └── patches/
-│       ├── 0001-…patch             # Numbered, additive
-│       └── …
+lifeos-nix/
+├── flake.nix                       # Top-level flake (packages.lifeos + default + compat aliases; nixosModules)
+├── pkgs/tools/misc/lifeos/
+│   ├── default.nix                 # The Nix derivation, vendored deps, and the `lifeos` wrapper
+│   ├── patches/                    # The five load-bearing patches
+│   └── vendor-locks/               # Injected bun lockfiles + HASHES.txt
+├── tests/
+│   ├── egress-test.sh              # Privacy invariant (deny-all netns + strace)
+│   └── settings-merge-test.sh      # Merge-safe install semantics
 ├── README.md                       # this file
 └── LICENSE                         # AGPL-3.0
 ```
-
----
-
-## Contributing
-
-Patches welcome — please follow the existing pattern:
-
-1. **Open an upstream issue first** (or reference an existing one). Patches that exist only in pai-nix without an upstream issue make the diff harder to maintain.
-2. **Generate hunks via `diff -u`.** Hand-counted `@@` headers will silently break. Workdir under `/tmp/<slug>/{before,after}/`, then `diff -u`, then prepend a git format-patch header.
-3. **Document the patch in its header** — bug, RCA, fix scope, files/lines touched, and verification evidence (synthetic test, grep against built output, or live probe where applicable).
-4. **Verify co-existence.** Read prior patches' headers and confirm your hunks don't conflict with their line ranges.
-5. **One patch per concern, one commit per patch.** Easier to review, easier to bisect, easier to upstream individually.
 
 ---
 
@@ -137,14 +114,13 @@ Patches welcome — please follow the existing pattern:
 
 This repository — the Nix expressions, patches, and documentation written here — is licensed under the **GNU Affero General Public License v3.0 only** (AGPL-3.0-only). See [`LICENSE`](LICENSE).
 
-The packaged software, **Personal AI Infrastructure (PAI)**, is fetched as an upstream tarball at build time and remains under its own license: **MIT**, copyright © 2025 Daniel Miessler. See the bundled `LICENSE` file in the upstream tarball.
+The packaged software, **LifeOS**, is fetched as upstream source at build time and remains under its own license: **MIT**, © Daniel Miessler.
 
-The two licenses are compatible: AGPL-3.0 covers the packaging contribution (this repo), MIT covers the bundled application. End users who interact with a hosted service running pai-nix are entitled to the source of the AGPL-licensed packaging contribution under section 13 of AGPL-3.0; the bundled PAI itself remains under MIT.
+The two licenses are compatible: AGPL-3.0 covers the packaging contribution (this repo), MIT covers the bundled application. End users who interact with a hosted service running lifeos-nix are entitled to the source of the AGPL-licensed packaging contribution under section 13 of AGPL-3.0; LifeOS itself remains under MIT.
 
 ---
 
 ## Acknowledgements
 
-- Daniel Miessler for [PAI](https://github.com/danielmiessler/Personal_AI_Infrastructure) — the Life OS itself.
-- The PAI community for filing the upstream issues that drove most of these patches.
+- Daniel Miessler for [LifeOS](https://github.com/danielmiessler/LifeOS) — the Life OS itself.
 - nixpkgs maintainers for the conventions this repo follows.
