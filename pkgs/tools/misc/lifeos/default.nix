@@ -93,7 +93,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     # build ID — upstream's Date.now()-based generateBuildId would make the output
     # non-reproducible — and drop the .next cache so only the static `out/` ships.
     substituteInPlace $out/share/lifeos/LifeOS/install/LIFEOS/PULSE/Observability/next.config.ts \
-      --replace 'build-''${Date.now()}' 'build-lifeos'
+      --replace-fail 'build-''${Date.now()}' 'build-lifeos'
     ( cd $out/share/lifeos/LifeOS/install/LIFEOS/PULSE/Observability
       export HOME=$TMPDIR NEXT_TELEMETRY_DISABLED=1 PATH=${nodejs}/bin:${bun}/bin:$PATH
       # Run next's JS entrypoint directly with store node — the vendored `.bin/next`
