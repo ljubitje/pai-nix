@@ -88,7 +88,7 @@ Each patch is a numbered, additive `.patch` with a multi-paragraph header (bug, 
 
 **Build green + from-scratch reproducible.** Privacy invariant **proven** by `tests/egress-test.sh`; install semantics covered by `tests/settings-merge-test.sh` (23/23). Both `packages.lifeos` and the `packages.personal-ai-infrastructure` alias build to the same store path; `nixosModules.{lifeos,pai}` both evaluate.
 
-**Pending (F7 sandbox smoke):** a full end-to-end smoke in a scratch `HOME` — Pulse reaching `localhost:31337/healthz` and Claude Code launching from the `lifeos` wrapper — is not yet run. Those two probes are the remaining live-verification owed before the packaging is called done.
+**Sandbox smoke (F7) — done.** `tests/smoke-test.sh` boots Pulse in a rootless net namespace (loopback isolated from any live instance) and asserts `/healthz` → HTTP 200, graceful `SIGTERM` shutdown (~110 ms), and the dashboard — built into the derivation via a hermetic `next build` — serving. The `lifeos` wrapper's launch chain is verified (claude binary + `lifeos.ts` + exec line); the interactive Claude Code launch is deferred (a Claude Code session cannot nest another). Remaining: the final hygiene/determinism pass (F8).
 
 ---
 
