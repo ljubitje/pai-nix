@@ -87,6 +87,21 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     cp -r ${deps.tokenxray} $out/share/lifeos/LifeOS/install/LIFEOS/TOOLS/TokenXray/node_modules
     chmod -R u+w $out/share/lifeos
 
+    # 2b) Build the Observability dashboard → static export (out/), fully offline
+    # (proven: the build exits 0 inside a deny-all netns). The SWC native binary is
+    # vendored, there is no next/font/google fetch, telemetry is disabled. Pin the
+    # build ID — upstream's Date.now()-based generateBuildId would make the output
+    # non-reproducible — and drop the .next cache so only the static `out/` ships.
+    substituteInPlace $out/share/lifeos/LifeOS/install/LIFEOS/PULSE/Observability/next.config.ts \
+      --replace 'build-''${Date.now()}' 'build-lifeos'
+    ( cd $out/share/lifeos/LifeOS/install/LIFEOS/PULSE/Observability
+      export HOME=$TMPDIR NEXT_TELEMETRY_DISABLED=1 PATH=${nodejs}/bin:${bun}/bin:$PATH
+      # Run next's JS entrypoint directly with store node — the vendored `.bin/next`
+      # shebang is `/usr/bin/env node`, which the pure build sandbox lacks, and we
+      # deliberately do NOT patchShebangs the shipped tree (would pin builder refs).
+      ${nodejs}/bin/node node_modules/next/dist/bin/next build
+      rm -rf .next tsconfig.tsbuildinfo )
+
     # 3) Editor-junk / broken-symlink / *.orig strip (retained from v5.0).
     find $out/share/lifeos -type d -name '.cursor' -exec rm -rf {} + 2>/dev/null || true
     find $out/share/lifeos -xtype l -delete 2>/dev/null || true
