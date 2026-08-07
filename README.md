@@ -15,8 +15,7 @@ Upstream ships as an AI-native, skill-only distribution installed by a chain of 
 ```nix
 # flake.nix of your system config
 {
-  # NOTE: the codeberg repo rename pai-nix → lifeos-nix is pending; this URL is live today.
-  inputs.lifeos-nix.url = "git+https://codeberg.org/ljubitje/pai-nix";
+  inputs.lifeos-nix.url = "git+https://codeberg.org/ljubitje/lifeos-nix";
 
   outputs = { self, nixpkgs, lifeos-nix, ... }: {
     nixosConfigurations.<host> = nixpkgs.lib.nixosSystem {
@@ -33,14 +32,14 @@ Upstream ships as an AI-native, skill-only distribution installed by a chain of 
 ### `nix profile` (any flake-aware Nix)
 
 ```bash
-nix profile install git+https://codeberg.org/ljubitje/pai-nix#lifeos
+nix profile install git+https://codeberg.org/ljubitje/lifeos-nix#lifeos
 lifeos          # first run installs into ~/.claude, then launches Claude Code with the LifeOS system prompt
 ```
 
 ### Try it ephemerally
 
 ```bash
-nix run git+https://codeberg.org/ljubitje/pai-nix#lifeos
+nix run git+https://codeberg.org/ljubitje/lifeos-nix#lifeos
 ```
 
 ---
