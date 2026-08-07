@@ -81,26 +81,34 @@ if [ "$UP" = 1 ]; then
   echo "HEALTHZ_CODE=$CODE"
   echo "HEALTHZ_BODY=$(head -c 400 "$WORK/healthz.body" | tr '\n' ' ')"
 fi
-T0=$(date +%s%N)
-kill -TERM "$PP" 2>/dev/null
-GRACE=0
-for i in $(seq 1 50); do kill -0 "$PP" 2>/dev/null || { GRACE=1; break; }; sleep 0.1; done
-T1=$(date +%s%N)
-echo "SIGTERM_MS=$(( (T1 - T0) / 1000000 ))"
-if [ "$GRACE" = 1 ]; then echo "SIGTERM_RESULT=EXITED"; else echo "SIGTERM_RESULT=HANG"; kill -9 "$PP" 2>/dev/null; fi
+if [ "$UP" = 1 ]; then
+  T0=$(date +%s%N)
+  kill -TERM "$PP" 2>/dev/null
+  GRACE=0
+  for i in $(seq 1 50); do kill -0 "$PP" 2>/dev/null || { GRACE=1; break; }; sleep 0.1; done
+  T1=$(date +%s%N)
+  echo "SIGTERM_MS=$(( (T1 - T0) / 1000000 ))"
+  if [ "$GRACE" = 1 ]; then wait "$PP" 2>/dev/null; echo "PULSE_EXIT=$?"; echo "SIGTERM_RESULT=EXITED"; else echo "SIGTERM_RESULT=HANG"; kill -9 "$PP" 2>/dev/null; fi
+else
+  kill -9 "$PP" 2>/dev/null   # never came up — graceful-shutdown is unverifiable
+fi
 HELPER
 chmod +x "$WORK/probe.sh"
 timeout 120 unshare -rn --map-root-user bash "$WORK/probe.sh" "$CFG" "$CFGHOME" "$PTH" "$WORK" > "$WORK/probe.out" 2>&1
 sed 's/^/      /' "$WORK/probe.out"
 
-if grep -q '^HEALTHZ_CODE=[0-9]' "$WORK/probe.out"; then
-  echo "  ok   ISC-108 — Pulse answered /healthz (HTTP $(grep '^HEALTHZ_CODE=' "$WORK/probe.out" | cut -d= -f2))"
+CODE="$(grep '^HEALTHZ_CODE=' "$WORK/probe.out" | cut -d= -f2)"
+UP="$(grep '^PULSE_UP=' "$WORK/probe.out" | cut -d= -f2)"
+if [ "$UP" = 1 ] && [ -n "$CODE" ] && [ "$CODE" -ge 200 ] 2>/dev/null && [ "$CODE" -lt 300 ] 2>/dev/null; then
+  echo "  ok   ISC-108 — Pulse /healthz HTTP $CODE (2xx)"
 else
-  echo "  FAIL ISC-108 — Pulse did not answer /healthz"; FAILS=$((FAILS+1))
+  echo "  FAIL ISC-108 — Pulse not up or /healthz not 2xx (PULSE_UP=$UP CODE=$CODE)"; FAILS=$((FAILS+1))
   tail -10 "$WORK/pulse.log" 2>/dev/null | sed 's/^/        pulse: /'
 fi
-if grep -q '^SIGTERM_RESULT=EXITED' "$WORK/probe.out"; then
-  echo "  ok   ISC-109 — graceful SIGTERM in $(grep '^SIGTERM_MS=' "$WORK/probe.out" | cut -d= -f2)ms (0029 holds)"
+if [ "$UP" != 1 ]; then
+  echo "  FAIL ISC-109 — Pulse never came up; graceful shutdown unverifiable"; FAILS=$((FAILS+1))
+elif grep -q '^SIGTERM_RESULT=EXITED' "$WORK/probe.out"; then
+  echo "  ok   ISC-109 — graceful SIGTERM in $(grep '^SIGTERM_MS=' "$WORK/probe.out" | cut -d= -f2)ms, exit $(grep '^PULSE_EXIT=' "$WORK/probe.out" | cut -d= -f2) (0029 holds)"
 else
   echo "  FAIL ISC-109 — SIGTERM hang (0029 regression)"; FAILS=$((FAILS+1))
 fi
