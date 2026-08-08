@@ -46,7 +46,7 @@ nix run git+https://codeberg.org/ljubitje/lifeos-nix#lifeos
 
 ## What's inside
 
-- **LifeOS v7.1.1** — fetched from `danielmiessler/LifeOS` at a pinned rev (`bc0a20a`) as a fixed source, hash-locked.
+- **LifeOS v7.1.1** — fetched from `danielmiessler/LifeOS` at the pinned `v7.1.1` release tag (`a4e8e74`) as a fixed source, hash-locked.
 - **Reproducible vendored dependencies** — one fixed-output derivation per `package.json` tree (root, TOOLS, PULSE, PULSE/Observability, TOOLS/TokenXray), built with `--frozen-lockfile --ignore-scripts` and `NEXT_TELEMETRY_DISABLED=1`. No runtime `bun install`, no postinstall beacons. Hashes captured for `x86_64-linux` (`vendor-locks/HASHES.txt`), from-scratch reproducibility verified.
 - **A five-patch set** (see below) — privacy kills + a graceful-shutdown fix.
 - **The `lifeos` launcher** on `PATH` — drives the upstream installer offline/additively, then `exec`s Claude Code with `LIFEOS_SYSTEM_PROMPT.md`. No rc-file mutation, no shell alias. Includes a freeze-guard that refuses to run against a pre-7.x config root.

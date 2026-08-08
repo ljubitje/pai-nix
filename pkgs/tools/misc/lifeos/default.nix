@@ -18,8 +18,8 @@ let
   src = fetchFromGitHub {
     owner = "danielmiessler";
     repo = "LifeOS";
-    rev = "bc0a20aab97c185c6be53cf9290fa4544bf2c118";
-    hash = "sha256-xVjKBMGckwoh0sujDp2CKwo57Wr012WjLagvQ0CWOZA=";
+    rev = "a4e8e7466c5e01af1fff865c6ad4258282fac63e"; # v7.1.1 release tag (M2 2026-08-07: re-pin from main-HEAD bc0a20a → exact tag for honest provenance)
+    hash = "sha256-XgjF4+G6bu78ZeYut4JVCgSh2HECdExKrFDDdMF/olU=";
   };
 
   # ── (b) reproducible-vendored deps ──────────────────────────────────────────
