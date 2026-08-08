@@ -4,7 +4,10 @@
 # Asserts: under a DENY-ALL network (rootless net namespace, loopback only) with an
 # EMPTY environment (no creds), NO default-active LifeOS code path attempts an external
 # connect(). "External" = any AF_INET/AF_INET6 that is not loopback. The invariant is
-# `default background egress ⊆ {Anthropic}`; with no creds shipped the achieved set is ∅.
+# `default background egress ⊆ {Anthropic} ∪ K`, where K = user-configured intentional
+# targets (e.g. healthcheck monitor sites via LIFEOS_PULSE_HEALTH_SITES) — EMPTY in this
+# base test (empty env, no creds), so the achieved set here is ∅. K is populated only in a
+# principal's own config; a LOS-config test run would allow-list those consented targets.
 #
 # A POSITIVE CONTROL (a script that deliberately dials 1.2.3.4) proves the harness would
 # catch a real egress — so a clean run means "nothing tried", not "nothing was watched".
@@ -110,7 +113,7 @@ fi
 
 echo "== result =="
 if [ "$FAILS" -eq 0 ]; then
-  echo "PASS — default background egress ⊆ {Anthropic} (achieved: ∅ external, no creds)"; exit 0
+  echo "PASS — default background egress ⊆ {Anthropic} ∪ K (base test: K=∅ empty env, achieved ∅ external, no creds)"; exit 0
 else
   echo "FAIL — $FAILS surface(s) attempted external egress"; exit 1
 fi
