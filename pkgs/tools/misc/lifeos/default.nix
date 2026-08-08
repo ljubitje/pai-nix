@@ -62,7 +62,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f2-deploycore-skip-npm.patch       # RedTeam CR-3: stop runtime bun install (deps vendored+bridged)
     ./patches/f4-a-neutralize-update-check.patch # f4-A: no external update-check (updates via Nix)
     ./patches/f4-b-elevenlabs-killswitch.patch   # Klemen B: ElevenLabs egress dead regardless of key
-    ./patches/f4-c-pulse-disable-default-active.patch # RedTeam (a): voice/telegram/morning-brief default-off
+    ./patches/f4-c-pulse-disable-default-active.patch # RedTeam (a) + LOS-recon: 6 egress modules default-off (voice/telegram/morning-brief + local_intelligence/airgradient-poll/memory-consolidation)
     ./patches/0029-fix-pulse-graceful-shutdown-on-sigterm.patch # F3 re-cut: Pulse graceful SIGTERM (no 60s hang / mid-op SIGKILL)
   ];
 
