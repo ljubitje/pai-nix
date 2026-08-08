@@ -1,39 +1,55 @@
-lifeos-nix patch f4-c — Ship PULSE.toml with the default-ACTIVE egress-capable modules off
+lifeos-nix patch f4-c — Ship PULSE.toml with default-active egress/autonomous modules off
 
 PROBLEM
-  RedTeam EGRESS gap (a): the shipped PULSE.toml sets three entries `enabled = true` that
-  are default-ACTIVE (module loaded / job scheduled) rather than merely dispatch targets:
-    - [voice]                     → VoiceServer module (cloud TTS path; already hard-killed
-                                    by f4-b, but the module still starts by default)
-    - [telegram]                  → Telegram bot module
-    - [[job]] life-morning-brief  → 7am job, output=voice
-  Every other external in the template is dispatch/target code that is env/cred-gated before
-  the socket (verified: lib.ts dispatchSingle — telegram/email/ntfy all skip without their
-  env var; airgradient-poll main() returns before fetch when AIRGRADIENT_TOKEN unset;
-  work/calendar/github config-gated). Those are inert with no creds. The three ACTIVE ones
-  are the gap: they load/run on a fresh install, so the point-1 invariant (default background
-  egress ⊆ {Anthropic}) should not depend on "no cred happens to be set."
+  RedTeam EGRESS gap (a): the shipped PULSE.toml sets entries `enabled = true` that are
+  default-ACTIVE (module loaded / job scheduled) rather than merely dispatch targets:
+    - [voice]                      → VoiceServer module (cloud TTS path; hard-killed by f4-b,
+                                     but the module still starts by default)
+    - [telegram]                   → Telegram bot module
+    - [[job]] life-morning-brief   → 7am job, output=voice
+
+  LOS reconciliation (2026-08-07) surfaced three MORE default-active entries of the same
+  class, which the original three-flip f4-c had missed:
+    - [local_intelligence]         → module spawns skills/LocalIntelligence/Tools/Refresh.ts on
+                                     a timer, which orchestrates EXTERNAL fetchers (patch.com
+                                     news, US public records: crime/elections/legislation/…).
+                                     A scheduled external-egress surface — same class as voice/
+                                     telegram, NOT a mere dispatch target. Also US-only
+                                     (Hometown = USPS state/county), zero value outside the US.
+    - [[job]] airgradient-poll     → 5-min sensor poll; inert without AIRGRADIENT_TOKEN, but no
+                                     sensor exists by default → default-off is cleaner hygiene.
+    - [[job]] memory-consolidation → nightly 3am `type=claude` (Sonnet) autonomous pass over the
+                                     last 20 sessions. Egress is to Anthropic (allowed by the
+                                     invariant), but a privacy-minded base should not ship
+                                     autonomous background AI + token spend on by default.
+
+  Every OTHER external in the template is dispatch/target code that is env/cred-gated before
+  the socket (telegram/email/ntfy/discord/twilio dispatchSingle skips without its env var;
+  work/calendar/github config-gated) → inert with no creds, deliberately left enabled.
 
 WHY THE FLIP SUFFICES (loader gates — pulse-unified.ts / pulse.ts)
-  - voice:   started only `if (config.voice?.enabled !== false)`  → false ⇒ module never imported/started.
-  - telegram:started only `if (config.telegram?.enabled)`         → false ⇒ module never imported/started.
-  - job:     scheduler does `if (!job.enabled) continue`          → false ⇒ life-morning-brief never scheduled/run.
-  The flag is load-bearing; enabled=false makes the egress code unreachable, not merely unused.
+  - module:  started only `if (config.X?.enabled !== false)` / `if (config.X?.enabled)` → false ⇒ never imported/started.
+  - job:     scheduler does `if (!job.enabled) continue`                                → false ⇒ never scheduled/run.
+  The flag is load-bearing; enabled=false makes the code path unreachable, not merely unused.
 
 FIX
-  Flip the three shipped defaults to `enabled = false`. This is the system-tier template;
-  a user re-enables per-module via LIFEOS/USER/CONFIG/PULSE.user.toml (merged by name,
-  user-tier wins) — so opt-in is one line, default is inert. observability/hooks/performance
-  stay on (local-only: localhost:31337 dashboard + local processing).
+  Flip six shipped defaults to `enabled = false`: voice, telegram, life-morning-brief (original
+  f4-c) + local_intelligence, airgradient-poll, memory-consolidation (LOS reconciliation
+  2026-08-07). System-tier template; a user re-enables per entry via
+  LIFEOS/USER/CONFIG/PULSE.user.toml (merged by name, user-tier wins) — opt-in is one line,
+  default inert. observability/hooks/performance/telos/da/healthcheck/cost-aggregation stay on
+  (local-only, or Anthropic-only for healthcheck's notify path).
 
 SCOPE / CO-EXISTENCE
-  One file, three one-line flips. Orthogonal to f4-a (lifeos.ts) and f4-b (voice/telegram/
-  Doctor source). Complements f4-b: f4-b kills the ElevenLabs call in-code; f4-c stops the
-  modules from being default-active at all.
+  One file, six one-line flips. Orthogonal to f4-a (lifeos.ts) and f4-b (voice/telegram/Doctor
+  source). Complements f4-b: f4-b kills the ElevenLabs call in-code, f4-c stops modules/jobs
+  from being default-active at all. ntfy/discord/twilio deliberately LEFT enabled (dispatch
+  targets, inert without creds; egress-test proves ∅ external with empty env).
 
 VERIFICATION
-  Hunks via `diff -u`; `patch -p1 --dry-run` clean; built PULSE.toml shows the three
-  `enabled = false`. No behavioral egress reachable at idle with no creds.
+  Hunks via `diff -u` against extracted upstream (a4e8e74) PULSE.toml; `patch -p1 --dry-run`
+  clean; built PULSE.toml shows the six `enabled = false`; egress-test.sh confirms ∅ external
+  egress with no creds and voice/telegram OFF at boot.
 
 --- a/LifeOS/install/LIFEOS/PULSE/PULSE.toml
 +++ b/LifeOS/install/LIFEOS/PULSE/PULSE.toml
@@ -50,6 +66,33 @@ VERIFICATION
  # Spoken summary of each text reply as a Telegram voice note (PR #1458, author anikin-xyz).
  # Requires ELEVENLABS_API_KEY. Set false to keep text replies but suppress voice notes.
  voice_summaries = true
+@@ -79,7 +79,7 @@
+ # See _NETWORK/Workflows/CaptureLogs.md for controller-side setup.
+ 
+ [local_intelligence]
+-enabled = true
++enabled = false  # lifeos-nix: default-off (privacy — external fetchers via skills/LocalIntelligence/Tools/Refresh.ts); opt-in via PULSE.user.toml
+ # Reads LIFEOS/USER/PRINCIPAL/PRINCIPAL_IDENTITY.md Hometown line.
+ # Daily digest at MEMORY/DATA/LocalIntelligence/latest.json.
+ # Read-only — fetching happens in skills/LocalIntelligence/Tools/Refresh.ts.
+@@ -130,7 +130,7 @@
+ type = "script"
+ command = "bun run checks/airgradient-poll.ts"
+ output = "log"
+-enabled = true
++enabled = false  # lifeos-nix: default-off (no AirGradient sensor by default); opt-in via PULSE.user.toml
+ 
+ # NOTE: cost-tracker moved to LIFEOS/USER/CONFIG/PULSE.user.toml on 2026-05-03 —
+ # scans {{PRINCIPAL_NAME}}-specific call-site fingerprint, doesn't belong in public template.
+@@ -142,7 +142,7 @@
+ prompt = "Run learning consolidation: execute `bun run ~/.claude/LIFEOS/TOOLS/SessionHarvester.ts --recent 20` then `bun run ~/.claude/LIFEOS/TOOLS/LearningPatternSynthesis.ts --week`. Summarize what was learned and any patterns found."
+ model = "sonnet"
+ output = "log"
+-enabled = true
++enabled = false  # lifeos-nix: default-off (autonomous nightly Claude pass over sessions); opt-in via PULSE.user.toml
+ 
+ # ── DA Subsystem Jobs ──
+ # Default-disabled in the public template: these scripts live under
 @@ -191,7 +191,7 @@
  type = "script"
  command = "bun run checks/life-morning-brief.ts"
