@@ -37,8 +37,10 @@ FIX
   f4-c) + local_intelligence, airgradient-poll, memory-consolidation (LOS reconciliation
   2026-08-07). System-tier template; a user re-enables per entry via
   LIFEOS/USER/CONFIG/PULSE.user.toml (merged by name, user-tier wins) — opt-in is one line,
-  default inert. observability/hooks/performance/telos/da/healthcheck/cost-aggregation stay on
-  (local-only, or Anthropic-only for healthcheck's notify path).
+  default inert. observability/hooks/performance/telos/da/cost-aggregation stay on (local-only).
+  healthcheck stays on too, but its egress is user-configured, NOT Anthropic: ntfy notify
+  (cred-gated) + probes of LIFEOS_PULSE_HEALTH_SITES if the principal sets them (exactly the K
+  targets in egress-test's `{Anthropic} ∪ K`) — inert by default (empty env: no sites, no cred).
 
 SCOPE / CO-EXISTENCE
   One file, six one-line flips. Orthogonal to f4-a (lifeos.ts) and f4-b (voice/telegram/Doctor
