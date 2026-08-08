@@ -14,7 +14,7 @@
   claude-code,
 }:
 let
-  version = "7.1.1";
+  version = "7.1.1.0"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .0 = first packaging
   src = fetchFromGitHub {
     owner = "danielmiessler";
     repo = "LifeOS";
