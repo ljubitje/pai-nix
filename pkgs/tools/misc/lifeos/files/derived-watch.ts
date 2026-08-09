@@ -33,7 +33,9 @@ const WATCH_SUBDIRS = ['', 'TELOS', 'TELOS/IDEAL_STATE', 'TELOS/CURRENT_STATE', 
 
 // DerivedSync's own outputs live under these watched dirs — ignore them, or every regen
 // re-triggers the watcher (a self-feeding loop; hash-idempotence would cap it at one no-op
-// run per regen, but ignoring outright means zero wasted spawns).
+// run per regen, but ignoring outright means zero wasted spawns). KEEP IN SYNC with
+// DerivedSync.ts's own watch-list exclusions; if it ever writes a new derived artifact INTO
+// the watched USER tree, add it here too (else derived-watch would spin a spawn every 30s).
 const IGNORE_FILES = new Set(['PRINCIPAL_TELOS.md', 'LIFEOS_STATE.json']);
 
 let watchers: FSWatcher[] = [];
@@ -61,11 +63,17 @@ export function start(): number {
     const dir = sub ? join(USER_DIR, sub) : USER_DIR;
     if (!existsSync(dir)) continue;
     try {
-      watchers.push(watch(dir, (_ev, filename) => {
+      const w = watch(dir, (_ev, filename) => {
         if (filename && IGNORE_FILES.has(basename(String(filename)))) return;
         schedule();
-      }));
-    } catch { /* skip unwatchable */ }
+      });
+      // An async inotify 'error' (watched dir removed/renamed, fs.inotify.max_user_watches
+      // exhausted) is emitted on the watcher; with no listener Node throws and could crash the
+      // long-lived Pulse daemon. Drop the dead watcher instead — the daily derived-sync cron
+      // is the safety-net for the coverage lost until the next Pulse restart.
+      w.on("error", () => { try { w.close(); } catch { /* already closed */ } });
+      watchers.push(w);
+    } catch { /* skip unwatchable dir */ }
   }
   console.log(`[derived-watch] watching ${watchers.length} USER dirs (debounce ${DEBOUNCE_MS}ms)`);
   return watchers.length;
