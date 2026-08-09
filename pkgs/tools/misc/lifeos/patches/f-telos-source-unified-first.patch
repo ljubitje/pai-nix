@@ -1,0 +1,55 @@
+lifeos-nix patch f-telos-source — GenerateTelosSummary reads unified TELOS.md first
+
+PROBLEM
+  GenerateTelosSummary.ts regenerates PRINCIPAL_TELOS.md, which is @-imported into the
+  DA's identity at every session start. Its readTelosFile() reads a legacy per-file
+  (MISSION.md, GOALS.md, …) FIRST and only falls back to the unified TELOS.md section
+  when the per-file is absent. But ScaffoldUser re-scaffolds SAMPLE per-file templates
+  ("(sample) Help the people I care about", "Ship MVP of Project X") on install_core.
+  Result: even when the user's real content lives in the unified TELOS.md, a
+  re-scaffolded sample per-file shadows it and PRINCIPAL_TELOS regenerates into
+  placeholders — silently overwriting identity with samples. Observed live 2026-08-09
+  on the migrated dev box (DerivedSync regen turned M0 "biti, ljubiti" into the sample).
+
+FIX (surgical, 1 hunk, one file)
+  Invert readTelosFile() to unified-first: prefer the unified TELOS.md section when it
+  is present and non-empty; fall back to a legacy per-file only when the unified section
+  is absent (back-compat for pre-unified trees). The comment already declares TELOS.md
+  the single source of truth — this makes the code match the declared intent.
+
+SCOPE / CO-EXISTENCE
+  Touches only readTelosFile() in LIFEOS/TOOLS/GenerateTelosSummary.ts. Disjoint from all
+  other patches (f2 DeployCore, f4-* egress/pulse, 0029 pulse-shutdown). No behavior change
+  when no per-file exists (the unchanged code path). loadTelosSections() and
+  LEGACY_FILE_TO_SECTION are unchanged.
+
+VERIFICATION
+  Post-build: with a SAMPLE per-file present alongside a populated unified TELOS.md, regen
+  yields the unified content (M0 = real), not the sample. Hunk generated via `diff -u`,
+  never hand-counted.
+
+--- a/LifeOS/install/LIFEOS/TOOLS/GenerateTelosSummary.ts
++++ b/LifeOS/install/LIFEOS/TOOLS/GenerateTelosSummary.ts
+@@ -89,14 +89,18 @@
+ }
+
+ function readTelosFile(filename: string): string {
+-  // Legacy per-file path first (back-compat), then unified-TELOS section.
+-  const path = join(TELOS_DIR, filename);
+-  if (existsSync(path)) return readFileSync(path, 'utf-8');
++  // Unified TELOS.md is the single source of truth — prefer its section.
++  // A legacy per-file is only a fallback when the unified section is absent
++  // (back-compat for trees predating the unified TELOS.md). Reading per-file
++  // FIRST let a re-scaffolded SAMPLE template shadow the real unified content
++  // and regenerate PRINCIPAL_TELOS into placeholders (lifeos-nix f-telos-source).
+   const sectionKey = LEGACY_FILE_TO_SECTION[filename];
+   if (sectionKey) {
+-    const sections = loadTelosSections();
+-    return sections[sectionKey] ?? '';
++    const section = loadTelosSections()[sectionKey];
++    if (section && section.trim()) return section;
+   }
++  const path = join(TELOS_DIR, filename);
++  if (existsSync(path)) return readFileSync(path, 'utf-8');
+   return '';
+ }

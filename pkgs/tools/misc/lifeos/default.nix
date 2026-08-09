@@ -64,6 +64,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f4-b-elevenlabs-killswitch.patch   # Klemen B: ElevenLabs egress dead regardless of key
     ./patches/f4-c-pulse-disable-default-active.patch # RedTeam (a) + LOS-recon: 6 egress modules default-off (voice/telegram/morning-brief + local_intelligence/airgradient-poll/memory-consolidation)
     ./patches/0029-fix-pulse-graceful-shutdown-on-sigterm.patch # F3 re-cut: Pulse graceful SIGTERM (no 60s hang / mid-op SIGKILL)
+    ./patches/f-telos-source-unified-first.patch # f-telos: GenerateTelosSummary reads unified TELOS.md first (re-scaffolded sample per-file no longer shadows identity)
   ];
 
   nativeBuildInputs = [ makeWrapper ];
