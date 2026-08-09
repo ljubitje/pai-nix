@@ -1,0 +1,34 @@
+lifeos-nix patch f-derived-watch-config — default-on [derived_watch] in PULSE.toml
+
+PROBLEM
+  The DerivedWatch module (f-derived-watch-wire) is gated on config.derived_watch.enabled.
+  Without a base config entry the gate is undefined; it defaults on via `!== false`, but the
+  module deserves an explicit, documented base default so the behavior is visible in the
+  shipped PULSE.toml rather than implicit.
+
+FIX
+  Add a [derived_watch] section to the base PULSE.toml, enabled = true (core sync default,
+  per the "default-on for core sync services" direction). One hunk, config only.
+
+SCOPE / CO-EXISTENCE
+  Base PULSE.toml only. User tier may override via PULSE.user.toml. Disjoint from f4-c
+  (which flips egress modules off) and from the wire/module changes.
+
+VERIFICATION
+  Post-build PULSE.toml contains [derived_watch] enabled = true. Hunk via `diff -u`.
+
+--- a/LifeOS/install/LIFEOS/PULSE/PULSE.toml
++++ b/LifeOS/install/LIFEOS/PULSE/PULSE.toml
+@@ -56,6 +56,12 @@
+ [performance]
+ enabled = true
+
++[derived_watch]
++enabled = true
++# Event-driven regen of derived artifacts (PRINCIPAL_TELOS/LIFEOS_STATE/Data-Plane) on USER
++# edits — inotify + debounce, inside the Pulse process (Linux launchd-WatchPaths equivalent).
++# The daily `derived-sync` cron job stays as the safety-net for missed events.
++
+ [hooks]
+ enabled = true
+ blocked_skills = ["keybindings-help"]

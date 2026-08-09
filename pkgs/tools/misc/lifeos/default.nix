@@ -65,6 +65,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f4-c-pulse-disable-default-active.patch # RedTeam (a) + LOS-recon: 6 egress modules default-off (voice/telegram/morning-brief + local_intelligence/airgradient-poll/memory-consolidation)
     ./patches/0029-fix-pulse-graceful-shutdown-on-sigterm.patch # F3 re-cut: Pulse graceful SIGTERM (no 60s hang / mid-op SIGKILL)
     ./patches/f-telos-source-unified-first.patch # f-telos: GenerateTelosSummary reads unified TELOS.md first (re-scaffolded sample per-file no longer shadows identity)
+    ./patches/f-derived-watch-wire.patch    # f-derived-watch: wire DerivedWatch (inotify on-change regen) into pulse.ts loadModules
+    ./patches/f-derived-watch-config.patch  # f-derived-watch: [derived_watch] enabled=true in base PULSE.toml
   ];
 
   nativeBuildInputs = [ makeWrapper ];
@@ -86,6 +88,12 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     install -dm755 $out/share/lifeos
     cp -r LifeOS $out/share/lifeos/
     chmod -R u+w $out/share/lifeos
+
+    # 1b) DerivedWatch — Linux event-driven regen module (launchd WatchPaths equivalent).
+    # Not in upstream (macOS uses launchd); shipped by lifeos-nix, wired into pulse.ts
+    # loadModules via the derived-watch patch. inotify + debounce, runs in the Pulse process.
+    install -m 0644 ${./files/derived-watch.ts} \
+      $out/share/lifeos/LifeOS/install/LIFEOS/PULSE/modules/derived-watch.ts
 
     # 2) Place vendored node_modules per tree (bridged into $CFG at runtime).
     cp -r ${deps.root}      $out/share/lifeos/LifeOS/install/node_modules
