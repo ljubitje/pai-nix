@@ -70,6 +70,13 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   buildInputs = [ bun nodejs bash git claude-code ]; # electron/curl/jq dropped
   dontBuild = true;
   dontConfigure = true;
+  # Ship the skill tree with upstream's portable `#!/usr/bin/env bun` shebangs intact.
+  # Without this, stdenv's fixupPhase auto-runs patchShebangs over $out and rewrites
+  # them to a builder store path (…/bun-X.Y.Z/bin/bun). That path dies on the next bun
+  # bump + `nix-collect-garbage`, ENOENT-ing on-demand skill tools mid-run. env-bun
+  # resolves against PATH and stays valid across bumps. The $out/bin/lifeos launcher is
+  # substitute-pinned below (@bash@ → ${bash}), not shebang-patched, so it is unaffected.
+  dontPatchShebangs = true;
 
   installPhase = ''
     runHook preInstall
