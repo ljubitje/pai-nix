@@ -1,0 +1,106 @@
+lifeos-nix patch f-launcher-cwd — default to the current directory, not ~/.claude
+
+PROBLEM
+  The `lifeos` launcher (LIFEOS/TOOLS/lifeos.ts) chdir'd to the config root (~/.claude) before
+  spawning Claude Code on EVERY launch, unless the user passed --local. So a session opened
+  anywhere (a project, a dev dir) landed with cwd = ~/.claude — Claude sees the LifeOS config
+  tree instead of the project the user is actually in. For a dev-first workflow that is the
+  wrong default; the useful case (session in the config root for LifeOS-meta work) is the rare one.
+
+FIX (invert the default)
+  Default is now stay-in-current-directory. Opt in to the config root with --claude-dir / -c.
+  --local is kept as a no-op alias for the now-default behavior (back-compat for existing use).
+  Both the interactive launch (cmdLaunch) and the one-shot (cmdPrompt) paths honor this; the
+  one-shot's unconditional chdir is removed. CLI flag, dispatch, help text, and docstring updated.
+
+SCOPE / CO-EXISTENCE
+  One file (lifeos.ts): cmdLaunch / cmdPrompt / arg-parse / help. Disjoint from f4-a, which
+  touches only the update-check functions (getLatestVersion / cmdUpdate). No other patch
+  touches lifeos.ts. Applied last, so the diff is against the f4-a-patched tree.
+
+VERIFICATION
+  `bun build --target bun` parses; hunks via diff -u. `lifeos` now stays in cwd; `lifeos -c`
+  runs in ~/.claude; `lifeos --local` still works (no-op).
+
+--- a/LifeOS/install/LIFEOS/TOOLS/lifeos.ts
++++ b/LifeOS/install/LIFEOS/TOOLS/lifeos.ts
+@@ -10,7 +10,7 @@
+  *   k -m bd            Launch with Bright Data MCP
+  *   k -m bd,ap         Launch with multiple MCPs
+  *   k -r / --resume    Resume a session (picker, or pass a session ID)
+- *   k --local          Stay in current directory (don't cd to ~/.claude)
++ *   k --claude-dir     Run in ~/.claude (LifeOS config root); default is now the current dir
+  *   k update           Update Claude Code
+  *   k version          Show version info
+  *   k profiles         List available profiles
+@@ -391,7 +391,7 @@
+ // Commands
+ // ============================================================================
+ 
+-async function cmdLaunch(options: { mcp?: string; resume?: boolean; resumeId?: string; local?: boolean; systemPrompt?: string }) {
++async function cmdLaunch(options: { mcp?: string; resume?: boolean; resumeId?: string; local?: boolean; claudeDir?: boolean; systemPrompt?: string }) {
+   // CLAUDE.md is now static — no build step needed.
+   // Algorithm spec is loaded on-demand when Algorithm mode triggers.
+   // (InstantiatePAI.ts is retired — kept for reference only)
+@@ -425,8 +425,10 @@
+     }
+   }
+ 
+-  // Change to LifeOS directory unless --local flag is set
+-  if (!options.local) {
++  // Stay in the current directory by default (dev-first: the session sees the project it was
++  // launched from). Opt in to the LifeOS config root (~/.claude) with --claude-dir / -c.
++  // (--local is retained as a no-op alias for the now-default behavior.)
++  if (options.claudeDir) {
+     process.chdir(CLAUDE_DIR);
+   }
+ 
+@@ -555,7 +557,7 @@
+     args.push("--append-system-prompt-file", systemPromptFile);
+   }
+ 
+-  process.chdir(CLAUDE_DIR);
++  // One-shot stays in the current directory (same dev-first default as interactive launches).
+ 
+   const env: Record<string, string> = { ...process.env } as Record<string, string>;
+   delete env.ANTHROPIC_API_KEY;
+@@ -579,7 +581,8 @@
+   k -m bd,ap               Launch with multiple MCPs
+   k -r, --resume [id]      Resume a session (interactive picker, or a specific session ID)
+   k -s, --system-prompt    System prompt file to append (default: LIFEOS_SYSTEM_PROMPT.md)
+-  k -l, --local            Stay in current directory (don't cd to ~/.claude)
++  k -c, --claude-dir       Run in the LifeOS config root (~/.claude) instead of the current dir
++  k -l, --local            (now the default; retained as a no-op) stay in the current directory
+ 
+ COMMANDS:
+   k update                 Update Claude Code to latest version
+@@ -633,6 +636,7 @@
+   let resume = false;
+   let resumeId: string | undefined;
+   let local = false;
++  let claudeDir = false;
+   let systemPrompt: string | undefined;
+   let command: string | undefined;
+   let subCommand: string | undefined;
+@@ -670,7 +674,11 @@
+         break;
+       case "-l":
+       case "--local":
+-        local = true;
++        local = true; // retained no-op: stay-in-cwd is now the default
++        break;
++      case "-c":
++      case "--claude-dir":
++        claudeDir = true;
+         break;
+       case "-v":
+       case "--version":
+@@ -747,7 +755,7 @@
+       break;
+     default:
+       // Launch with options
+-      await cmdLaunch({ mcp, resume, resumeId, local, systemPrompt });
++      await cmdLaunch({ mcp, resume, resumeId, local, claudeDir, systemPrompt });
+   }
+ }
+ 
