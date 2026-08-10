@@ -6,8 +6,7 @@
   };
   outputs = { self, nixpkgs, flake-utils }:
     let
-      # Compat alias (F6): /etc/nixos imports `pai.nixosModules.pai`. The old name
-      # stays pointing at the same module so a downstream flake update never breaks.
+      # nixosModule that installs the lifeos package system-wide.
       lifeosModule = { pkgs, system ? pkgs.stdenv.hostPlatform.system, ... }: {
         environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.default ];
       };
@@ -33,6 +32,5 @@
       }
     ) // {
       nixosModules.lifeos = lifeosModule;
-      nixosModules.pai = lifeosModule; # compat alias (F6)
     };
 }
