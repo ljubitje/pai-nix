@@ -1,0 +1,158 @@
+lifeos-nix patch f-docintegrity-rename — finish the PAI→LIFEOS rename in the doc-integrity chain
+
+PROBLEM
+  Upstream 7.1.1 moved the config root (~/.claude → ~/.claude/LIFEOS) and renamed the system
+  docs, but left the doc-integrity chain half-renamed. In hooks/handlers/DocCrossRefIntegrity.ts
+  and hooks/lib/change-detection.ts, dead 'PAI/' string-gates and a mixed-case 'LifeOS/'
+  ref-regex silently disable the checks: system-doc edits aren't detected (ARCHITECTURE_SUMMARY
+  isn't auto-regenerated), doc cross-references aren't validated, and core-system doc
+  categorization is dead. Verified against the pinned upstream tree — this is upstream's
+  unfinished rename, not a local artifact.
+
+FIX (2 files; mechanical + one structural)
+  DocCrossRefIntegrity.ts: path-gates 'PAI/' → '/DOCUMENTATION/' (system docs live in
+  LIFEOS/DOCUMENTATION/); ref-regex 'LifeOS/' → 'LIFEOS/' and 'config/PAI' → 'config/LIFEOS'
+  (real refs are 'LIFEOS/DOCUMENTATION/X/Y.md'); drift reference label 'PAI/' → 'LIFEOS/'.
+  change-detection.ts: HIGH_PRIORITY_PATHS + core-system regex use 7.1.1 doc names
+  (PAISYSTEM→LifeosSystemArchitecture, THEHOOKSYSTEM→HookSystem, THEDELEGATION→DelegationSystem,
+  MEMORYSYSTEM→MemorySystem); PHILOSOPHICAL /PAI\// → /LIFEOS\//. STRUCTURAL: the core-system
+  match in categorizeChange() sat inside the `if (path.includes('skills/'))` block (5.0
+  skills/PAI/ layout) — moved ABOVE it, since 7.1.1 core docs are in LIFEOS/DOCUMENTATION/,
+  not skills/, and would otherwise fall through to generic 'documentation'.
+
+SCOPE / CO-EXISTENCE
+  Two hook files, disjoint from all other patches (f-telos, f-derived-watch, f4-*). Neither
+  file is touched by any other patch. Cosmetic comment examples mentioning PAISECURITYSYSTEM
+  left as-is (not functional).
+
+VERIFICATION
+  All 6 mapped core-system doc paths exist under LIFEOS/DOCUMENTATION/; actual refs verified as
+  'LIFEOS/DOCUMENTATION/X/Y.md' (regex matches); both files parse (bun build). Hunks via diff -u.
+
+--- a/LifeOS/install/hooks/handlers/DocCrossRefIntegrity.ts
++++ b/LifeOS/install/hooks/handlers/DocCrossRefIntegrity.ts
+@@ -137,7 +137,7 @@
+ 
+ function isSystemDocModified(modifiedFiles: Set<string>): boolean {
+   for (const path of modifiedFiles) {
+-    if (path.includes('PAI/') && path.endsWith('.md')) return true;
++    if (path.includes('/DOCUMENTATION/') && path.endsWith('.md')) return true;
+   }
+   return false;
+ }
+@@ -183,7 +183,7 @@
+       const relPath = filePath.slice(LIFEOS_DIR.length + 1);
+       if (LIFEOS_EXCLUDED.some(ex => relPath.includes(ex))) continue;
+ 
+-      if ((relPath.startsWith('PAI/') || relPath.includes('skills/')) && (relPath.endsWith('.md') || relPath.endsWith('.ts') || relPath.endsWith('.yaml') || relPath.endsWith('.yml'))) return true;
++      if ((relPath.startsWith('DOCUMENTATION/') || relPath.includes('skills/')) && (relPath.endsWith('.md') || relPath.endsWith('.ts') || relPath.endsWith('.yaml') || relPath.endsWith('.yml'))) return true;
+       if (relPath.includes('/Tools/') && relPath.endsWith('.ts')) return true;
+       if (relPath.includes('/Workflows/') && relPath.endsWith('.md')) return true;
+       continue;
+@@ -291,8 +291,8 @@
+  */
+ function checkSystemDocRefs(docsToCheck: string[], systemDocsOnDisk: Set<string>): DriftItem[] {
+   const drift: DriftItem[] = [];
+-  // Match backtick-wrapped or plain doc references in PAI/ (both old skills/PAI/ and new PAI/ paths)
+-  const sysDocRefRegex = /(?:`|'|")(?:~\/\.(?:claude|config\/PAI)\/)?(?:skills\/)?LifeOS\/([\w/]+\.md)(?:`|'|")/g;
++  // Match backtick-wrapped or plain doc references under LIFEOS/ (7.1.1 config root; was PAI/ + LifeOS/ pre-rename)
++  const sysDocRefRegex = /(?:`|'|")(?:~\/\.(?:claude|config\/LIFEOS)\/)?(?:skills\/)?LIFEOS\/([\w/]+\.md)(?:`|'|")/g;
+ 
+   for (const docFile of docsToCheck) {
+     const docPath = join(SYSTEM_DIR, docFile);
+@@ -312,8 +312,8 @@
+         drift.push({
+           doc: docFile,
+           pattern: 'system_doc_ref',
+-          reference: `PAI/${refTarget}`,
+-          issue: `References "PAI/${refTarget}" but file does not exist`,
++          reference: `LIFEOS/${refTarget}`,
++          issue: `References "LIFEOS/${refTarget}" but file does not exist`,
+         });
+       }
+     }
+@@ -426,7 +426,7 @@
+   // Collect modified system files with their content — must match isSystemFileModified scope
+   const relevantFiles = Array.from(modifiedFiles).filter(f =>
+     f.includes('/hooks/') ||
+-    f.includes('/PAI/') ||
++    f.includes('/DOCUMENTATION/') ||
+     f.includes('skills/') ||
+     f.endsWith('settings.json') ||
+     f.includes('/agents/') ||
+@@ -778,7 +778,7 @@
+ 
+   // Update Last Updated timestamps for modified SYSTEM docs
+   for (const path of modifiedFiles) {
+-    if (path.includes('PAI/') && path.endsWith('.md')) {
++    if (path.includes('/DOCUMENTATION/') && path.endsWith('.md')) {
+       const docFile = basename(path);
+       const result = updateLastUpdatedTimestamp(docFile);
+       if (result) {
+--- a/LifeOS/install/hooks/lib/change-detection.ts
++++ b/LifeOS/install/hooks/lib/change-detection.ts
+@@ -69,19 +69,19 @@
+ 
+ // High-priority paths that always warrant documentation
+ const HIGH_PRIORITY_PATHS = [
+-  'PAI/',
+-  'PAISYSTEMARCHITECTURE.md',
+-  'SKILLSYSTEM.md',
+-  'MEMORYSYSTEM.md',
+-  'THEHOOKSYSTEM.md',
+-  'THEDELEGATIONSYSTEM.md',
+-  'THENOTIFICATIONSYSTEM.md',
++  'LIFEOS/DOCUMENTATION/',
++  'LifeosSystemArchitecture.md',
++  'SkillSystem.md',
++  'MemorySystem.md',
++  'HookSystem.md',
++  'DelegationSystem.md',
++  'NotificationSystem.md',
+   'settings.json',
+ ];
+ 
+ // Philosophical/architectural patterns in paths
+ const PHILOSOPHICAL_PATTERNS = [
+-  /PAI\//i,
++  /LIFEOS\//i,
+   /ARCHITECTURE/i,
+   /PRINCIPLES/i,
+   /FOUNDING/i,
+@@ -216,13 +216,16 @@
+     return null;
+   }
+ 
+-  // Categorize by path pattern
++  // Categorize by path pattern.
++  // Core-system docs live under LIFEOS/DOCUMENTATION/ in 7.1.1 (was skills/PAI/ pre-rename),
++  // so match them BEFORE the skills/ and generic-.md branches — else they fall through to
++  // 'documentation'. (L512/L569 hasCoreSystem use the same pattern, standalone.)
++  if (path.match(/LIFEOS\/DOCUMENTATION\/(?:LifeosSystemArchitecture|Hooks\/HookSystem|Delegation\/DelegationSystem|Memory\/MemorySystem)/)) return 'core-system';
+   if (path.includes('skills/')) {
+     // Exclude personal/private skills (prefixed with _ by convention)
+     const skillMatch = path.match(/skills\/(_[^/]+)/);
+     if (skillMatch) return null;
+     if (path.includes('/Workflows/')) return 'workflow';
+-    if (path.match(/PAI\/(?:DOCUMENTATION\/)?(?:PAISYSTEM|THEHOOKSYSTEM|THEDELEGATION|MEMORYSYSTEM)/)) return 'core-system';
+     return 'skill';
+   }
+ 
+@@ -509,7 +512,7 @@
+   const hasTools = paths.some(p => p.includes('/Tools/') && p.endsWith('.ts'));
+   const hasHooks = paths.some(p => p.includes('hooks/'));
+   const hasConfig = paths.some(p => p.endsWith('settings.json'));
+-  const hasCoreSystem = paths.some(p => p.match(/PAI\/(?:DOCUMENTATION\/)?(?:PAISYSTEM|THEHOOKSYSTEM|THEDELEGATION|MEMORYSYSTEM)/));
++  const hasCoreSystem = paths.some(p => p.match(/LIFEOS\/DOCUMENTATION\/(?:LifeosSystemArchitecture|Hooks\/HookSystem|Delegation\/DelegationSystem|Memory\/MemorySystem)/));
+   const hasCoreUser = paths.some(p => p.includes('LIFEOS/USER/'));
+ 
+   let title = '';
+@@ -566,7 +569,7 @@
+   // Core system changes
+   else if (hasCoreSystem) {
+     const docNames = paths
+-      .filter(p => p.match(/PAI\/(?:DOCUMENTATION\/)?(?:PAISYSTEM|THEHOOKSYSTEM|THEDELEGATION|MEMORYSYSTEM)/))
++      .filter(p => p.match(/LIFEOS\/DOCUMENTATION\/(?:LifeosSystemArchitecture|Hooks\/HookSystem|Delegation\/DelegationSystem|Memory\/MemorySystem)/))
+       .map(p => basename(p, '.md'));
+     if (docNames.length === 1) {
+       title = `${docNames[0]} Documentation Updated`;

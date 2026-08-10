@@ -67,6 +67,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f-telos-source-unified-first.patch # f-telos: GenerateTelosSummary reads unified TELOS.md first (re-scaffolded sample per-file no longer shadows identity)
     ./patches/f-derived-watch-wire.patch    # f-derived-watch: wire DerivedWatch (inotify on-change regen) into pulse.ts loadModules
     ./patches/f-derived-watch-config.patch  # f-derived-watch: [derived_watch] enabled=true in base PULSE.toml
+    ./patches/f-docintegrity-rename.patch   # f-docintegrity: finish PAI→LIFEOS rename in DocCrossRefIntegrity + change-detection (dead doc-integrity checks)
   ];
 
   nativeBuildInputs = [ makeWrapper ];
