@@ -69,6 +69,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f-derived-watch-config.patch  # f-derived-watch: [derived_watch] enabled=true in base PULSE.toml
     ./patches/f-docintegrity-rename.patch   # f-docintegrity: finish PAI→LIFEOS rename in DocCrossRefIntegrity + change-detection (dead doc-integrity checks)
     ./patches/f-launcher-cwd-default.patch  # f-launcher-cwd: `lifeos` stays in cwd by default (dev-first); --claude-dir/-c opts into ~/.claude
+    ./patches/f-mergesettings-preserve-hooks.patch # f-mergesettings: MergeSettings re-attaches hooks from canonical hooks/hooks.json (else user overlay → SessionStart array dropped 5→0)
   ];
 
   nativeBuildInputs = [ makeWrapper ];

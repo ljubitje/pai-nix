@@ -1,0 +1,82 @@
+lifeos-nix patch f-mergesettings-preserve-hooks — MergeSettings preserves hooks from the canon; SettingsBackport yields hooks ownership
+
+PROBLEM
+  settings.json is a generated artifact: the SessionStart hook runs
+  `SettingsBackport; MergeSettings(system ⊕ user) → settings.json` every session start.
+  Neither settings.system.json nor settings.user.json carries a `hooks` block — hooks
+  live in the canonical install/hooks/hooks.json, read ONLY by InstallHooks (Setup
+  step 7, NOT the SessionStart chain). On a fresh install MergeSettings no-ops (no user
+  overlay yet → early guard) so InstallHooks-wired hooks survive. But once a user overlay
+  exists — which any user with settings deltas creates — MergeSettings rewrites
+  settings.json WITHOUT hooks, dropping the whole SessionStart array incl. its own regen
+  hook (+ LoadContext, HookHealer, …). Probe on the migrated dev box 2026-08-10: merge
+  dropped SessionStart hooks 5 → 0.
+
+FIX (2 files)
+  MergeSettings.ts — after mergeSettings(), re-attach `hooks` from the canonical
+  hooks/hooks.json, anchored to os.homedir() (like MERGE_SNAPSHOT_PATH), NOT a CLI arg.
+  Past the fresh-install guard the canon must exist & be well-formed; a missing or
+  malformed (.hooks not an object) canon ABORTS LOUDLY (throw → exit 1) so the prior
+  hooks-ful settings.json is preserved, rather than silently writing a hooks-less one.
+  Simple assignment, not deep-merge: no settings layer carries hooks, canon is authoritative.
+
+  SettingsBackport.ts — exclude the `hooks` subtree from drift. Since MergeSettings now
+  re-attaches hooks from the canon (which always wins), SettingsBackport must NOT backport
+  a hooks value into settings.user.json: it would persist a stale value MergeSettings
+  discards, and its post-backport verification (bare mergeSettings, no canon overwrite)
+  would falsely report the value "survives". One source of truth for hooks: hooks/hooks.json.
+
+SCOPE / VERIFICATION (2026-08-10, dev box, adversarial review round 2)
+  - Snapshot-safe: snapshot includes re-attached hooks → SettingsBackport three-way diff
+    sees no hooks drift → no clobber (respects the 2026-07-11 hooks-BPE fix).
+  - Fresh-install guard unchanged: user absent → MergeSettings no-op, hooks from InstallHooks.
+  - Bad-canon abort preserves the prior settings.json; only cost is new user deltas don't
+    propagate until the canon is fixed — acceptable (a broken canon should block
+    regeneration, not silently degrade to a hooks-less file).
+  - Verified: normal merge → hooks 5→5, user scalar override wins; canon missing → exit 1
+    + prior settings.json untouched; canon .hooks=[] → exit 1. Two independent review agents
+    (silent-failure + code-review) round-1 findings all addressed.
+
+diff --git a/LifeOS/install/LIFEOS/TOOLS/MergeSettings.ts b/LifeOS/install/LIFEOS/TOOLS/MergeSettings.ts
+index bd956f6..29af74c 100755
+--- a/LifeOS/install/LIFEOS/TOOLS/MergeSettings.ts
++++ b/LifeOS/install/LIFEOS/TOOLS/MergeSettings.ts
+@@ -525,6 +525,22 @@ async function runCli(argv: string[]): Promise<number> {
+     const user = await parseJsonFileOrThrow(options.userPath);
+     const merged = mergeSettings(system, user);
+ 
++    // (b) Re-attach hooks from the canonical hooks/hooks.json (home-anchored, like
++    // MERGE_SNAPSHOT_PATH). Neither settings layer carries hooks, so mergeSettings()
++    // would strip the SessionStart array (incl. this regen hook) once a user overlay
++    // exists. Past the fresh-install guard the canon must exist & be well-formed — a
++    // missing/malformed canon aborts loudly (preserving the prior hooks-ful file)
++    // rather than writing a hooks-less one. Snapshot-safe (SettingsBackport skips hooks).
++    const hooksPath = path.join(os.homedir(), ".claude", "hooks", "hooks.json");
++    if (!existsSync(hooksPath)) {
++      throw new Error(`hooks canon absent at ${hooksPath} — refusing to write a hooks-less settings.json (would strip the SessionStart array). Restore it or re-run InstallHooks.`);
++    }
++    const hooksJson = await parseJsonFileOrThrow(hooksPath);
++    if (!isObjectRecord(hooksJson?.hooks)) {
++      throw new Error(`hooks canon ${hooksPath} has no valid .hooks object — refusing to write a hooks-less settings.json.`);
++    }
++    merged.hooks = hooksJson.hooks;
++
+     // The harness exports env values verbatim — expand leading $HOME/${HOME}/~ so
+     // LIFEOS_DIR et al. resolve to real paths on a fresh install (#1404 / #1422).
+     expandEnvHomeReferences(merged, process.env.HOME || "");
+diff --git a/LifeOS/install/LIFEOS/TOOLS/SettingsBackport.ts b/LifeOS/install/LIFEOS/TOOLS/SettingsBackport.ts
+index 60aed10..c8e2344 100755
+--- a/LifeOS/install/LIFEOS/TOOLS/SettingsBackport.ts
++++ b/LifeOS/install/LIFEOS/TOOLS/SettingsBackport.ts
+@@ -125,7 +125,10 @@ async function run(dryRun: boolean): Promise<number> {
+   }
+   const snapshot = await parseJsonFileOrThrow(MERGE_SNAPSHOT_PATH);
+ 
+-  const drift = collectDrift(snapshot, actual);
++  // hooks are owned by the canonical hooks/hooks.json (re-attached by MergeSettings),
++  // not the user overlay — exclude them from backport so we never persist a hooks value
++  // that MergeSettings would discard, nor falsely report it "survives the merge".
++  const drift = collectDrift(snapshot, actual).filter((d) => d.segments[0] !== "hooks");
+ 
+   if (drift.length === 0) {
+     console.log("settings.json matches the last merge snapshot — nothing to backport");
