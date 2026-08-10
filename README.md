@@ -4,7 +4,7 @@ Nix packaging of [LifeOS](https://github.com/danielmiessler/LifeOS) — Daniel M
 
 Upstream ships as an AI-native, skill-only distribution installed by a chain of `bun` TypeScript tools driven by `INSTALL.md`, assuming a writable `~/.claude` and network access at install time. lifeos-nix wraps that into a proper derivation: the skill+runtime payload is store-copied, every npm dependency tree is vendored as a fixed-output derivation (reproducible, offline), a small patch set neutralizes default background egress, and a `lifeos` launcher on `PATH` drives the upstream installer in user space — no `/etc`, `~/.zshrc`, or `~/.bashrc` writes.
 
-> **Rebased from the earlier v5.0.0 PAI packaging.** Upstream renamed PAI → LifeOS and shipped v7.1.1 ("The Bitter Pill" reorg): skill-only distribution, `PAI/` → `LIFEOS/`, config `yaml` → `toml`. The 29 v5.0.0-era patches were retired after a full triage against 7.1.1 (most fixed upstream or made obsolete); the current set is nine load-bearing patches — five privacy/runtime (f2, f4-*, 0029) plus four completing upstream's unfinished PAI→LIFEOS migration and adding the Linux DerivedWatch service (f-telos, f-derived-watch ×2, f-docintegrity). History: `ISA.md` (local system of record).
+> **Rebased from the earlier v5.0.0 PAI packaging.** Upstream renamed PAI → LifeOS and shipped v7.1.1 ("The Bitter Pill" reorg): skill-only distribution, `PAI/` → `LIFEOS/`, config `yaml` → `toml`. The 29 v5.0.0-era patches were retired after a full triage against 7.1.1 (most fixed upstream or made obsolete); the current set is ten load-bearing patches — five privacy/runtime (f2, f4-*, 0029) plus five completing upstream's unfinished PAI→LIFEOS migration, adding the Linux DerivedWatch service, and a dev-first launcher default (f-telos, f-derived-watch ×2, f-docintegrity, f-launcher-cwd). History: `ISA.md` (local system of record).
 
 ---
 
@@ -66,6 +66,7 @@ Each patch is a numbered, additive `.patch` with a multi-paragraph header (bug, 
 | `f-derived-watch-wire`                   | Wire an in-process inotify **DerivedWatch** module into Pulse `loadModules` — the Linux equivalent of launchd WatchPaths (on-edit regen of derived artifacts; debounced, single-flight, output-ignore). Module shipped via `installPhase` from `files/derived-watch.ts`. |
 | `f-derived-watch-config`                 | Default-on `[derived_watch]` in base `PULSE.toml`.                                               |
 | `f-docintegrity-rename`                  | Finish the PAI→LIFEOS rename in the doc-integrity chain (`DocCrossRefIntegrity`, `change-detection`): dead `PAI/` path-gates → `/DOCUMENTATION/`, ref-regex → `LIFEOS/`, 7.1.1 doc names, and core-system detection moved out of the 5.0 `skills/` block. |
+| `f-launcher-cwd-default`                 | `lifeos` launcher stays in the **current directory** by default (dev-first); `--claude-dir`/`-c` opts into `~/.claude` for LifeOS-meta work. `--local` retained as a no-op alias. |
 
 ---
 
@@ -102,7 +103,7 @@ lifeos-nix/
 ├── flake.nix                       # Top-level flake (packages.lifeos + default + compat aliases; nixosModules)
 ├── pkgs/tools/misc/lifeos/
 │   ├── default.nix                 # The Nix derivation, vendored deps, and the `lifeos` wrapper
-│   ├── patches/                    # The nine load-bearing patches
+│   ├── patches/                    # The ten load-bearing patches
 │   ├── files/                      # DerivedWatch module, copied into the payload at installPhase
 │   └── vendor-locks/               # Injected bun lockfiles + HASHES.txt
 ├── tests/
