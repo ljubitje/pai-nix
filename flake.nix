@@ -23,8 +23,6 @@
         packages.claude-code = claude-code;
         packages.lifeos = lifeos;
         packages.default = lifeos;
-        # Compat alias (F6): old output name kept so pinned consumers keep resolving.
-        packages.personal-ai-infrastructure = lifeos;
         # Convenience: `nix develop` drops you into a shell with bun + git ready.
         devShells.default = pkgs.mkShell {
           packages = [ pkgs.bun pkgs.git ];
