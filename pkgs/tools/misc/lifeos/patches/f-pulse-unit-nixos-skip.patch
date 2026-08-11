@@ -1,0 +1,60 @@
+lifeos-nix patch f-pulse-unit-nixos-skip — on NixOS, defer the Pulse systemd unit to the nix module
+
+PROBLEM
+  PULSE/manage.sh (install action, Linux branch) templates a ~/.config/systemd/user/
+  com.lifeos.pulse.service from the public template, whose PATH is
+  __HOME__/.bun/bin:/usr/local/bin:/usr/bin:/bin. On NixOS none of those dirs hold
+  bash or bun, so Bun.which("bash") returns null, spawnScript falls back to the absent
+  "/bin/bash", and every cron job that shells out dies with ENOENT (cost-aggregation,
+  healthcheck, poller-meta-monitor stuck since the 2026-08-09 migration; /healthz
+  degraded). The lifeos-nix nixosModule now owns this unit declaratively with a correct
+  `path` (bash/bun/git), but a user-level ~/.config unit SHADOWS the nix-provided one
+  (load precedence ~/.config/systemd/user > /etc/systemd/user), so the installer must
+  not write its own on NixOS — and must evict any stale one a pre-fix install left.
+
+FIX (1 file)
+  manage.sh — in the Linux install branch, detect NixOS (/etc/NIXOS) and: skip the unit
+  templating + `systemctl --user enable`; `rm -f` any stale ~/.config unit (else it
+  shadows the nix one and no test catches it — the daemon still binds :31337, only cron
+  spawnScript dies); enable-linger, daemon-reload, start the nix-managed unit. Non-NixOS
+  Linux is unchanged (still templates + enables its own unit). macOS branch untouched.
+
+diff --git a/LifeOS/install/LIFEOS/PULSE/manage.sh b/LifeOS/install/LIFEOS/PULSE/manage.sh
+--- a/LifeOS/install/LIFEOS/PULSE/manage.sh
++++ b/LifeOS/install/LIFEOS/PULSE/manage.sh
+@@ -116,14 +116,27 @@
+       systemctl --user stop "$PLIST_NAME" 2>/dev/null || true
+       pkill -9 -f "bun.*pulse.ts" 2>/dev/null || true
+       sleep 1
+-      # Substitute __HOME__ + __BUN_PATH__ placeholders (public template);
+-      # no-op on service files that already have literal paths.
+-      sed -e "s|__HOME__|$HOME|g" -e "s|__BUN_PATH__|$BUN_PATH|g" "$SERVICE_SRC" > "$SERVICE_DST"
+-      # Ensure user services survive logout/reboot (no-op if already enabled)
+-      loginctl enable-linger "$USER" 2>/dev/null || true
+-      systemctl --user daemon-reload
+-      systemctl --user enable "$PLIST_NAME"
+-      systemctl --user start "$PLIST_NAME"
++      if [ -e /etc/NIXOS ]; then
++        # NixOS: the com.lifeos.pulse.service unit is owned declaratively by the
++        # lifeos-nix nixosModule (correct PATH with bash/bun via `path`). A
++        # user-level ~/.config unit would SHADOW the nix one (load precedence
++        # ~/.config/systemd/user > /etc/systemd/user) and reintroduce the
++        # /usr/bin:/bin PATH (no bash → every cron job ENOENTs on /bin/bash), so
++        # remove any stale one a pre-fix install left, then start the nix unit.
++        rm -f "$SERVICE_DST"
++        loginctl enable-linger "$USER" 2>/dev/null || true
++        systemctl --user daemon-reload
++        systemctl --user start "$PLIST_NAME"
++      else
++        # Substitute __HOME__ + __BUN_PATH__ placeholders (public template);
++        # no-op on service files that already have literal paths.
++        sed -e "s|__HOME__|$HOME|g" -e "s|__BUN_PATH__|$BUN_PATH|g" "$SERVICE_SRC" > "$SERVICE_DST"
++        # Ensure user services survive logout/reboot (no-op if already enabled)
++        loginctl enable-linger "$USER" 2>/dev/null || true
++        systemctl --user daemon-reload
++        systemctl --user enable "$PLIST_NAME"
++        systemctl --user start "$PLIST_NAME"
++      fi
+     else
+       # Cleanup any prior pulse before installing fresh — prevents the stale-PID
+       # / unbound-port half-dead state where a previous launchd-managed pulse is
