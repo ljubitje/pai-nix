@@ -73,6 +73,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f-cron-breaker-halfopen.patch # f-cron-breaker: Pulse cron breaker self-heals via 30-min half-open probe (else a transient failure spike deadlocks the job → healthz degraded forever)
     ./patches/f-pulse-unit-nixos-skip.patch # f-pulse-unit: on NixOS skip installer unit-gen; nix module owns com.lifeos.pulse.service (correct PATH — else jobs ENOENT /bin/bash)
     ./patches/f-projects-dormant.patch # f-projects-dormant: do not force-load USER/PROJECTS.md (unbounded growth → ~53% startup ctx); opt-in via manual uncomment, on-demand via ContextSearch
+    ./patches/f-projects-no-memory-writes.patch # f-projects-no-mem-writes: retire memory machinery around PROJECTS.md (reviewer proposals/tier-b/GC/freshness) — companion to dormant
   ];
 
   nativeBuildInputs = [ makeWrapper ];
