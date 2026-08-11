@@ -105,6 +105,20 @@ else
   echo "  FAIL ISC-108 — Pulse not up or /healthz not 2xx (PULSE_UP=$UP CODE=$CODE)"; FAILS=$((FAILS+1))
   tail -10 "$WORK/pulse.log" 2>/dev/null | sed 's/^/        pulse: /'
 fi
+# ISC-108b: reachable is not enough — a fresh boot must be HEALTHY. A "degraded"
+# body (HTTP still 200) means a subsystem is already failing at boot. Caught the
+# 2026-08-11 miss where migration verified HTTP 200 only and shipped 3 dead cron
+# jobs. (Weak for the /bin/bash-PATH bug itself — jobs don't fire in this window
+# and the probe PATH carries bash — but catches persistent degraded-at-boot.)
+if [ "$UP" = 1 ]; then
+  STATUS="$(grep -o '"status":"[a-z]*"' "$WORK/healthz.body" 2>/dev/null | head -1 | cut -d'"' -f4)"
+  if [ "$STATUS" = "ok" ]; then
+    echo "  ok   ISC-108b — healthz status: ok"
+  else
+    echo "  FAIL ISC-108b — healthz status '$STATUS' (expected ok) — degraded at boot"; FAILS=$((FAILS+1))
+    grep -o '"reasons":\[[^]]*\]' "$WORK/healthz.body" 2>/dev/null | sed 's/^/        /'
+  fi
+fi
 if [ "$UP" != 1 ]; then
   echo "  FAIL ISC-109 — Pulse never came up; graceful shutdown unverifiable"; FAILS=$((FAILS+1))
 elif grep -q '^SIGTERM_RESULT=EXITED' "$WORK/probe.out"; then
