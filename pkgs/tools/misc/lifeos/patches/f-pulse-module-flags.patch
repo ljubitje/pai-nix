@@ -1,0 +1,214 @@
+lifeos-nix patch f-pulse-module-flags — make Pulse module enable/disable flags actually work
+
+PROBLEM
+  Two gaps made per-module enable flags dead: (1) loadPulseConfig() only populated ~13
+  module keys in the returned config and NEVER merged PULSE.user.toml module sections, so
+  config.X for any user-only or unmapped module (amber, assets, books, conduit, menubar,
+  projects, usage, doctor, memory, tab-freshness, local_intelligence, hypotheses,
+  derived_watch, siri) was undefined; (2) ten "surface" modules were imported with no
+  enabled gate at all. Net: `config.X?.enabled !== false` always passed → modules loaded
+  regardless of PULSE.toml/PULSE.user.toml. Observed 2026-08-11: local_intelligence loaded
+  despite the N1/K10 OFF flag (no egress — its fetch is POST-only and never triggered —
+  but the flag was simply inert). K10 user-tier toggles (amber/assets/books/conduit OFF)
+  were entirely ignored.
+
+FIX (1 file, pulse.ts)
+  loadPulseConfig — parse PULSE.user.toml and merge its module sections over PULSE.toml
+  (user wins, per-section shallow merge), then populate config.X for every module from the
+  merged map (`mod(k)`). Existing keys switch parsed.X → merged.X so user overrides apply.
+  loadModules — gate the ten always-loaded surface modules behind
+  `if (config.X?.enabled !== false)` (default-on; false disables). PulseConfig type gains
+  the previously-missing module keys. Jobs merge is unchanged (loadConfig).
+
+diff --git a/LifeOS/install/LIFEOS/PULSE/pulse.ts b/LifeOS/install/LIFEOS/PULSE/pulse.ts
+--- a/LifeOS/install/LIFEOS/PULSE/pulse.ts
++++ b/LifeOS/install/LIFEOS/PULSE/pulse.ts
+@@ -59,6 +59,7 @@
+ import {
+   type DaemonState,
+   loadConfig,
++  USER_CRON_PATH,
+   isDue,
+   matchesCron,
+   readState,
+@@ -201,62 +202,62 @@
+     }
+   }
+   // Tab freshness — universal per-tab data-source freshness (always loaded).
+-  try {
++  if (config.tab_freshness?.enabled !== false) try {
+     tabFreshnessModule = await import("./modules/tab-freshness")
+   } catch (err) {
+     log("warn", "Tab freshness module not available", { error: String(err) })
+   }
+   // Memory — autonomic-memory subsystem state surface (always loaded).
+-  try {
++  if (config.memory?.enabled !== false) try {
+     memoryModule = await import("./modules/memory")
+     if (memoryModule.start) memoryModule.start()
+   } catch (err) {
+     log("warn", "Memory module not available", { error: String(err) })
+   }
+   // Conduit — sensory layer daily-record surface (read-only; capture is launchd).
+-  try {
++  if (config.conduit?.enabled !== false) try {
+     conduitModule = await import("./modules/conduit")
+     if (conduitModule.start) conduitModule.start()
+   } catch (err) {
+     log("warn", "Conduit module not available", { error: String(err) })
+   }
+   // Menu bar — cross-subsystem aggregator behind the rich native menu bar dropdown.
+-  try {
++  if (config.menubar?.enabled !== false) try {
+     menubarModule = await import("./modules/menubar")
+     if (menubarModule.start) menubarModule.start()
+   } catch (err) {
+     log("warn", "Menubar module not available", { error: String(err) })
+   }
+   // Books — favorite-books surface over USER/BOOKS.md.
+-  try {
++  if (config.books?.enabled !== false) try {
+     booksModule = await import("./modules/books")
+     if (booksModule.start) booksModule.start()
+   } catch (err) {
+     log("warn", "Books module not available", { error: String(err) })
+   }
+   // Amber — idea capture & preservation surface (ledger, knowledge, bookmarks, flows).
+-  try {
++  if (config.amber?.enabled !== false) try {
+     amberModule = await import("./modules/amber")
+     if (amberModule.start) amberModule.start()
+   } catch (err) {
+     log("warn", "Amber module not available", { error: String(err) })
+   }
+   // Projects — project routing-table surface over USER/PROJECTS.md.
+-  try {
++  if (config.projects?.enabled !== false) try {
+     projectsModule = await import("./modules/projects")
+     if (projectsModule.start) await projectsModule.start()
+   } catch (err) {
+     log("warn", "Projects module not available", { error: String(err) })
+   }
+   // Assets — unified read-only inventory over USER/GEAR.md + network topology.
+-  try {
++  if (config.assets?.enabled !== false) try {
+     assetsModule = await import("./modules/assets")
+     if (assetsModule.start) await assetsModule.start()
+   } catch (err) {
+     log("warn", "Assets module not available", { error: String(err) })
+   }
+   // Usage — Anthropic subscription + durable token/cost/model usage surface.
+-  try {
++  if (config.usage?.enabled !== false) try {
+     usageModule = await import("./modules/usage")
+     if (usageModule.start) await usageModule.start()
+   } catch (err) {
+@@ -272,7 +273,7 @@
+   }
+   // Doctor — read-only System Health surface over the advisory capability
+   // manifest + heartbeat written by LIFEOS/TOOLS/Doctor.ts (always loaded).
+-  try {
++  if (config.doctor?.enabled !== false) try {
+     doctorModule = await import("./modules/doctor")
+     if (doctorModule.start) await doctorModule.start()
+   } catch (err) {
+@@ -299,6 +300,18 @@
+   local_intelligence?: { enabled: boolean; [key: string]: unknown }
+   telos?: { enabled: boolean; [key: string]: unknown }
+   hypotheses?: { enabled: boolean; [key: string]: unknown }
++  derived_watch?: { enabled: boolean; [key: string]: unknown }
++  siri?: { enabled: boolean; [key: string]: unknown }
++  amber?: { enabled: boolean; [key: string]: unknown }
++  assets?: { enabled: boolean; [key: string]: unknown }
++  books?: { enabled: boolean; [key: string]: unknown }
++  conduit?: { enabled: boolean; [key: string]: unknown }
++  menubar?: { enabled: boolean; [key: string]: unknown }
++  projects?: { enabled: boolean; [key: string]: unknown }
++  usage?: { enabled: boolean; [key: string]: unknown }
++  doctor?: { enabled: boolean; [key: string]: unknown }
++  memory?: { enabled: boolean; [key: string]: unknown }
++  tab_freshness?: { enabled: boolean; [key: string]: unknown }
+   worker?: { name: string; [key: string]: unknown }
+   jobs: Array<{
+     name: string
+@@ -318,33 +331,65 @@
+   const raw = await Bun.file(join(PULSE_DIR, "PULSE.toml")).text()
+   const parsed = parse(raw) as Record<string, unknown>
+ 
++  // Merge PULSE.user.toml module sections (user wins) so user-tier enable/disable
++  // toggles actually take effect. Without this, config.X for a user-only module is
++  // undefined and the gate `config.X?.enabled !== false` always passes → the module
++  // loads regardless of its flag (observed 2026-08-11: amber/local_intelligence et al).
++  let userParsed: Record<string, unknown> = {}
++  if (existsSync(USER_CRON_PATH)) {
++    try { userParsed = parse(await Bun.file(USER_CRON_PATH).text()) as Record<string, unknown> } catch { /* keep base */ }
++  }
++  const merged: Record<string, unknown> = { ...parsed }
++  for (const [k, v] of Object.entries(userParsed)) {
++    if (k === "job") continue // jobs merged via loadConfig below
++    const base = merged[k]
++    merged[k] = (v && typeof v === "object" && base && typeof base === "object")
++      ? { ...(base as Record<string, unknown>), ...(v as Record<string, unknown>) }
++      : v
++  }
++  const mod = (k: string) => merged[k] as { enabled: boolean; [key: string]: unknown } | undefined
++
+   const daemonConfig = await loadConfig(PULSE_DIR)
+ 
+   // Converge DA identity on one source of truth (PR #1459, author anikin-xyz): PULSE.toml
+   // ships a placeholder [da].primary, but the DA's real name lives in LIFEOS_CONFIG.toml
+   // [da].name. Defer to it when present; fresh installs without the user config keep PULSE.toml.
+-  const da = (parsed.da as PulseConfig["da"]) ?? { enabled: false }
++  const da = (merged.da as PulseConfig["da"]) ?? { enabled: false }
+   try {
+     const daName = loadLifeosConfig().da.name
+     if (daName) da.primary = daName
+   } catch { /* LIFEOS_CONFIG.toml absent/invalid — keep PULSE.toml value */ }
+ 
+   return {
+-    port: (parsed.port as number) ?? parseInt(process.env.PULSE_PORT || "31337", 10),
+-    tls: (parsed.tls as PulseConfig["tls"]) ?? undefined,
+-    voice: (parsed.voice as PulseConfig["voice"]) ?? { enabled: true },
+-    telegram: (parsed.telegram as PulseConfig["telegram"]) ?? { enabled: false },
+-    imessage: (parsed.imessage as PulseConfig["imessage"]) ?? { enabled: false },
+-    observability: (parsed.observability as PulseConfig["observability"]) ?? { enabled: true },
+-    performance: (parsed.performance as PulseConfig["performance"]) ?? { enabled: true },
+-    syslog: (parsed.syslog as PulseConfig["syslog"]) ?? { enabled: false, port: 5514 },
+-    work: (parsed.work as PulseConfig["work"]) ?? { enabled: true },
+-    bunker: (parsed.bunker as PulseConfig["bunker"]) ?? { enabled: true },
+-    content: (parsed.content as PulseConfig["content"]) ?? { enabled: true },
+-    telos: (parsed.telos as PulseConfig["telos"]) ?? { enabled: true },
+-    hooks: (parsed.hooks as PulseConfig["hooks"]) ?? { enabled: true },
++    port: (merged.port as number) ?? parseInt(process.env.PULSE_PORT || "31337", 10),
++    tls: (merged.tls as PulseConfig["tls"]) ?? undefined,
++    voice: (merged.voice as PulseConfig["voice"]) ?? { enabled: true },
++    telegram: (merged.telegram as PulseConfig["telegram"]) ?? { enabled: false },
++    imessage: (merged.imessage as PulseConfig["imessage"]) ?? { enabled: false },
++    observability: (merged.observability as PulseConfig["observability"]) ?? { enabled: true },
++    performance: (merged.performance as PulseConfig["performance"]) ?? { enabled: true },
++    syslog: (merged.syslog as PulseConfig["syslog"]) ?? { enabled: false, port: 5514 },
++    work: (merged.work as PulseConfig["work"]) ?? { enabled: true },
++    bunker: (merged.bunker as PulseConfig["bunker"]) ?? { enabled: true },
++    content: (merged.content as PulseConfig["content"]) ?? { enabled: true },
++    telos: (merged.telos as PulseConfig["telos"]) ?? { enabled: true },
++    hooks: (merged.hooks as PulseConfig["hooks"]) ?? { enabled: true },
++    local_intelligence: mod("local_intelligence"),
++    hypotheses: mod("hypotheses"),
++    derived_watch: mod("derived_watch"),
++    siri: mod("siri"),
++    amber: mod("amber"),
++    assets: mod("assets"),
++    books: mod("books"),
++    conduit: mod("conduit"),
++    menubar: mod("menubar"),
++    projects: mod("projects"),
++    usage: mod("usage"),
++    doctor: mod("doctor"),
++    memory: mod("memory"),
++    tab_freshness: mod("tab-freshness"),
+     da,
+-    worker: parsed.worker as PulseConfig["worker"],
++    worker: merged.worker as PulseConfig["worker"],
+     jobs: daemonConfig.jobs,
+   }
+ }
