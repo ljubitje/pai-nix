@@ -70,6 +70,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f-docintegrity-rename.patch   # f-docintegrity: finish PAI→LIFEOS rename in DocCrossRefIntegrity + change-detection (dead doc-integrity checks)
     ./patches/f-launcher-cwd-default.patch  # f-launcher-cwd: `lifeos` stays in cwd by default (dev-first); --claude-dir/-c opts into ~/.claude
     ./patches/f-mergesettings-preserve-hooks.patch # f-mergesettings: MergeSettings re-attaches hooks from canonical hooks/hooks.json (else user overlay → SessionStart array dropped 5→0)
+    ./patches/f-mergesettings-prune-write-path.patch # f-mergesettings-prune-write: backport upstream v7.28.3 INERT_FILE_RULE_TOOLS — prune inert Write(path)/MultiEdit(path) perms (file permissions resolve against Edit(path) only). Clears the startup "not matched by file permission checks" warnings. Faithful subset of upstream → dissolves cleanly on the eventual version bump
     ./patches/f-cron-breaker-halfopen.patch # f-cron-breaker: Pulse cron breaker self-heals via 30-min half-open probe (else a transient failure spike deadlocks the job → healthz degraded forever)
     ./patches/f-pulse-unit-nixos-skip.patch # f-pulse-unit: on NixOS skip installer unit-gen; nix module owns com.lifeos.pulse.service (correct PATH — else jobs ENOENT /bin/bash)
     ./patches/f-projects-dormant.patch # f-projects-dormant: do not force-load USER/PROJECTS.md (unbounded growth → ~53% startup ctx); opt-in via manual uncomment, on-demand via ContextSearch
