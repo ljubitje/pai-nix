@@ -76,6 +76,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f-projects-dormant.patch # f-projects-dormant: do not force-load USER/PROJECTS.md (unbounded growth → ~53% startup ctx); opt-in via manual uncomment, on-demand via ContextSearch
     ./patches/f-pulse-module-flags.patch # f-pulse-module-flags: merge PULSE.user.toml module sections + gate 10 always-load modules (else enable flags dead → modules load regardless)
     ./patches/f-projects-no-memory-writes.patch # f-projects-no-mem-writes: retire memory machinery around PROJECTS.md (reviewer proposals/tier-b/GC/freshness) — companion to dormant
+    ./patches/f-mergesettings-hooks-overlay.patch # f-mergesettings-hooks-overlay: compose LIFEOS/USER/CONFIG/hooks.user.json over official hooks.json (our hooks leave the official file → syncs cleanly, no B∩C)
   ];
 
   nativeBuildInputs = [ makeWrapper ];

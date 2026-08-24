@@ -1,0 +1,46 @@
+lifeos-nix patch f-mergesettings-hooks-overlay — compose a USER hooks overlay so our
+hook additions never live inside the official hooks.json
+
+PROBLEM
+  Our custom hooks (TelosSummarySync, the codeberg statusline auto-update, an extra
+  DocIntegrity) were added by EDITING the official hooks/hooks.json in place. Mixed
+  ownership means every upstream hooks.json evolution collides with our edits — the file
+  is permanently "ours-modified official" (a B∩C case) and can never sync cleanly.
+
+FIX (1 file, MergeSettings.ts)
+  After re-attaching the official hooks (b), compose a USER overlay at
+  LIFEOS/USER/CONFIG/hooks.user.json (the ours-zone, alongside PULSE.user.toml) — unioned
+  per event onto the official entries. hooks/hooks.json stays PURE official → syncs cleanly,
+  no collision. Missing overlay = official only (fresh install, no-op). Malformed overlay =
+  abort loud (never compose a broken hooks block). Mirrors the settings.system/settings.user
+  split. No new imports (path/os/existsSync/parseJsonFileOrThrow/isObjectRecord already used).
+
+--- a/LifeOS/install/LIFEOS/TOOLS/MergeSettings.ts
++++ b/LifeOS/install/LIFEOS/TOOLS/MergeSettings.ts
+@@ -568,6 +568,26 @@
+     }
+     merged.hooks = hooksJson.hooks;
+ 
++    // (b2) Compose the USER hooks overlay over the official base. Our hook additions live
++    // in LIFEOS/USER/CONFIG/hooks.user.json (the ours-zone, alongside PULSE.user.toml) —
++    // NEVER mixed into the official hooks.json, which then stays pure-official and syncs
++    // cleanly (no per-update B∩C collision). Overlay entries are unioned per event onto the
++    // official ones. Missing overlay = official only (fresh install, no-op). Malformed overlay
++    // = abort loud rather than compose a broken hooks block. Mirrors the settings.user.json split.
++    const hooksOverlayPath = path.join(os.homedir(), ".claude", "LIFEOS", "USER", "CONFIG", "hooks.user.json");
++    if (existsSync(hooksOverlayPath)) {
++      const overlay = await parseJsonFileOrThrow(hooksOverlayPath);
++      if (!isObjectRecord(overlay?.hooks)) {
++        throw new Error(`hooks overlay ${hooksOverlayPath} has no valid .hooks object — refusing to compose a broken hooks block.`);
++      }
++      const composed = merged.hooks as Record<string, unknown[]>;
++      for (const [event, entries] of Object.entries(overlay.hooks as Record<string, unknown>)) {
++        if (!Array.isArray(entries)) continue;
++        composed[event] = Array.isArray(composed[event]) ? [...composed[event], ...entries] : [...entries];
++      }
++      merged.hooks = composed;
++    }
++
+     // The harness exports env values verbatim — expand leading $HOME/${HOME}/~ so
+     // LIFEOS_DIR et al. resolve to real paths on a fresh install (#1404 / #1422).
+     expandEnvHomeReferences(merged, process.env.HOME || "");
