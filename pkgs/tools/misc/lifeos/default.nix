@@ -132,6 +132,27 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     find $out/share/lifeos -xtype l -delete 2>/dev/null || true
     find $out/share/lifeos -name '*.orig' -delete 2>/dev/null || true
 
+    # 3b) Normalize bash shebangs to env-portable form (companion to dontPatchShebangs +
+    # the upstream `#!/usr/bin/env bun` policy). NixOS has NO /bin/bash; upstream ships some
+    # .sh with `#!/bin/bash`, which ENOENTs for DIRECTLY-executed scripts (ContextReduction.hook.sh
+    # via CC hook, LIFEOS_StatusLine.sh via statusLine). /usr/bin/env is guaranteed and bash is on
+    # the CC-inherited PATH (more reliable than the env-bun already trusted). Scope *.sh only —
+    # `#!/bin/bash` also appears in Fabric pattern DATA (content, never executed). Cross-platform safe
+    # (macOS keeps working). Council-ratified 2026-08-24 (#1: sed + loud-fail assertion).
+    find $out/share/lifeos -type f -name '*.sh' \
+      -exec sed -i '1s@^#!/bin/bash$@#!/usr/bin/env bash@' {} +
+    # Loud fail-safe: fail the build if any executed .sh still ships a dead /bin/bash shebang.
+    # errexit-independent (explicit `exit 1`, NOT `! grep` — bash exempts `!`-negation from set -e),
+    # and LINE-1 scoped to match the sed above (an unanchored grep would false-fail on a `#!/bin/bash`
+    # that legitimately appears mid-file, e.g. a heredoc that emits a bootstrap script).
+    bad=$(find $out/share/lifeos -type f -name '*.sh' \
+      -exec sh -c 'head -1 "$1" | grep -q "^#!/bin/bash$" && echo "$1"; true' _ {} \; || true)
+    if [ -n "$bad" ]; then
+      echo "ERROR: dead /bin/bash shebang survived normalization (NixOS has no /bin/bash):" >&2
+      printf '%s\n' "$bad" >&2
+      exit 1
+    fi
+
     # 4) The `lifeos` launcher on PATH (no rc mutation, no alias).
     install -dm755 $out/bin
     cat > $out/bin/lifeos << 'WRAP'
