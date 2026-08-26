@@ -21,12 +21,24 @@ WORK="$(mktemp -d /tmp/lifeos-smoke.XXXXXX)"
 trap 'pkill -9 -f "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 FAILS=0
 CFGHOME="$WORK/act"; CFG="$CFGHOME/.claude"; mkdir -p "$CFG"
-# Live-untouched guard: fingerprint a stable live marker before the run, compare after.
-# Version-agnostic (the box is 7.1.1 post-migration; the old hardcoded .pai-version=5.0.0
-# check rotted the moment the live install migrated). The scratch HOME already isolates the
-# activation; this is belt-and-suspenders that the smoke never writes real ~/.claude.
-LIVE_VER="$HOME/.claude/LIFEOS/VERSION"
-LIVE_BEFORE="$([ -f "$LIVE_VER" ] && sha256sum "$LIVE_VER" | cut -d' ' -f1 || echo absent)"
+# Live-untouched guard: fingerprint a set of daemon-STABLE, activation-written live files
+# before the run, compare after. Self-baselining — it compares the run's own before/after,
+# never an absolute expected value, so upstream version bumps are a non-issue (the old
+# hardcoded .pai-version=5.0.0 check rotted the moment the live install migrated). The
+# scratch HOME already isolates the activation; this trips if that isolation ever regresses
+# and lets the activation write real ~/.claude. Each file is written by a distinct activation
+# step (VERSION←DeployCore, settings.system.json←InstallSettings, CLAUDE.md +
+# LIFEOS_SYSTEM_PROMPT.md←install steps), so together they canary the whole chain. NOTE:
+# settings.json is deliberately EXCLUDED — it is regenerated at runtime (~2h churn probed),
+# so it would false-fail; only files the live daemon never rewrites belong here.
+CANARY_FILES=(
+  "$HOME/.claude/LIFEOS/VERSION"
+  "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROMPT.md"
+  "$HOME/.claude/settings.system.json"
+  "$HOME/.claude/CLAUDE.md"
+)
+canary_fp() { for f in "${CANARY_FILES[@]}"; do [ -f "$f" ] && sha256sum "$f" || echo "absent $f"; done | sha256sum | cut -d' ' -f1; }
+LIVE_BEFORE="$(canary_fp)"
 
 echo "== F7 sandbox smoke =="
 echo "-- building .#lifeos --"
@@ -134,11 +146,11 @@ else
 fi
 
 echo "-- freeze re-check: live install untouched by the smoke run --"
-LIVE_AFTER="$([ -f "$LIVE_VER" ] && sha256sum "$LIVE_VER" | cut -d' ' -f1 || echo absent)"
+LIVE_AFTER="$(canary_fp)"
 if [ "$LIVE_AFTER" = "$LIVE_BEFORE" ]; then
-  echo "  ok   live ~/.claude/LIFEOS/VERSION unchanged during smoke ($LIVE_BEFORE)"
+  echo "  ok   live canary (${#CANARY_FILES[@]} stable files) unchanged during smoke"
 else
-  echo "  FAIL live install mutated during smoke (before=$LIVE_BEFORE after=$LIVE_AFTER)"; FAILS=$((FAILS+1))
+  echo "  FAIL live install mutated during smoke (canary before=$LIVE_BEFORE after=$LIVE_AFTER)"; FAILS=$((FAILS+1))
 fi
 
 echo "== result =="
