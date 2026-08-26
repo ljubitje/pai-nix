@@ -21,6 +21,12 @@ WORK="$(mktemp -d /tmp/lifeos-smoke.XXXXXX)"
 trap 'pkill -9 -f "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 FAILS=0
 CFGHOME="$WORK/act"; CFG="$CFGHOME/.claude"; mkdir -p "$CFG"
+# Live-untouched guard: fingerprint a stable live marker before the run, compare after.
+# Version-agnostic (the box is 7.1.1 post-migration; the old hardcoded .pai-version=5.0.0
+# check rotted the moment the live install migrated). The scratch HOME already isolates the
+# activation; this is belt-and-suspenders that the smoke never writes real ~/.claude.
+LIVE_VER="$HOME/.claude/LIFEOS/VERSION"
+LIVE_BEFORE="$([ -f "$LIVE_VER" ] && sha256sum "$LIVE_VER" | cut -d' ' -f1 || echo absent)"
 
 echo "== F7 sandbox smoke =="
 echo "-- building .#lifeos --"
@@ -127,9 +133,13 @@ else
   echo "  FAIL ISC-109 — SIGTERM hang (0029 regression)"; FAILS=$((FAILS+1))
 fi
 
-echo "-- freeze re-check: live install untouched --"
-LV="$(cat /home/user/.claude/.pai-version 2>/dev/null)"
-[ "$LV" = "5.0.0" ] && echo "  ok   live .pai-version still 5.0.0" || { echo "  FAIL live version now '$LV'"; FAILS=$((FAILS+1)); }
+echo "-- freeze re-check: live install untouched by the smoke run --"
+LIVE_AFTER="$([ -f "$LIVE_VER" ] && sha256sum "$LIVE_VER" | cut -d' ' -f1 || echo absent)"
+if [ "$LIVE_AFTER" = "$LIVE_BEFORE" ]; then
+  echo "  ok   live ~/.claude/LIFEOS/VERSION unchanged during smoke ($LIVE_BEFORE)"
+else
+  echo "  FAIL live install mutated during smoke (before=$LIVE_BEFORE after=$LIVE_AFTER)"; FAILS=$((FAILS+1))
+fi
 
 echo "== result =="
 if [ "$FAILS" -eq 0 ]; then
