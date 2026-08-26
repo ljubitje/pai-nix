@@ -77,6 +77,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f-pulse-module-flags.patch # f-pulse-module-flags: merge PULSE.user.toml module sections + gate 10 always-load modules (else enable flags dead → modules load regardless)
     ./patches/f-projects-no-memory-writes.patch # f-projects-no-mem-writes: retire memory machinery around PROJECTS.md (reviewer proposals/tier-b/GC/freshness) — companion to dormant
     ./patches/f-mergesettings-hooks-overlay.patch # f-mergesettings-hooks-overlay: compose LIFEOS/USER/CONFIG/hooks.user.json over official hooks.json (our hooks leave the official file → syncs cleanly, no B∩C)
+    ./patches/f-pulse-preflight-tilde.patch # f-pulse-preflight-tilde: cron preflight expands ~/ before existsSync (else any ~-path job is falsely "script not present" → disabled every boot; upstream #1392 gate mishandles ~)
   ];
 
   nativeBuildInputs = [ makeWrapper ];
