@@ -162,6 +162,20 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       exit 1
     fi
 
+    # 3c) MANIFEST.sha256 — official-file fingerprints for payload-sync A/C detection (B2).
+    # payload-sync distinguishes official files (safe to sync store→live) from ours (leave/
+    # merge) by hash: on the list → official, off it → ours. Comprehensive: EVERY shipped
+    # payload file EXCEPT vendored deps, generated build output, and the user-data zone
+    # (USER/MEMORY are scaffolded per-install, never synced). MUST be the last payload
+    # mutation so hashes reflect the final bytes (post-shebang-normalization). Reproducible:
+    # %P (no leading ./) + LC_ALL=C sort → stable order; standard `sha256sum` format (-c verifiable).
+    ( cd $out/share/lifeos/LifeOS/install
+      find . -type f \
+        ! -path '*/node_modules/*' ! -path '*/Observability/out/*' ! -path '*/.next/*' \
+        ! -path './USER/*' ! -path '*/USER/*' ! -path '*/MEMORY/*' \
+        ! -name MANIFEST.sha256 \
+        -printf '%P\n' | LC_ALL=C sort | xargs sha256sum > MANIFEST.sha256 )
+
     # 4) The `lifeos` launcher on PATH (no rc mutation, no alias).
     install -dm755 $out/bin
     cat > $out/bin/lifeos << 'WRAP'
