@@ -20,7 +20,7 @@
  *   bun payload-sync.ts --new <B-install-dir> [--old <A-install-dir>] [--live <~/.claude>] [--roots LIFEOS,hooks] [--apply]
  */
 import { createHash } from "node:crypto"
-import { readFileSync, readdirSync, existsSync, mkdirSync, copyFileSync, rmSync, chmodSync, statSync } from "node:fs"
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, copyFileSync, rmSync, chmodSync, statSync } from "node:fs"
 import { join, relative, dirname } from "node:path"
 
 function arg(flag: string, def?: string): string | undefined {
@@ -29,9 +29,11 @@ function arg(flag: string, def?: string): string | undefined {
 }
 
 const NEW = arg("--new")!
-const OLD = arg("--old") // optional
+const OLD = arg("--old") // optional fallback / bootstrap accelerator
 const LIVE = arg("--live", join(process.env.HOME ?? "", ".claude"))!
 const ROOTS = (arg("--roots", "LIFEOS,hooks") as string).split(",")
+const MANIFEST = arg("--manifest", join(NEW, "MANIFEST.sha256"))!   // official fingerprints for B (this release)
+const KNOWN = arg("--known", join(LIVE, "LIFEOS", "MEMORY", "STATE", "known-official.sha256"))! // accumulated across releases
 
 if (!NEW || !existsSync(NEW)) { console.error("payload-sync: --new (B payload install dir) manjka/ne obstaja"); process.exit(2) }
 
@@ -40,6 +42,26 @@ const SKIP = /(^|\/)(USER|MEMORY|node_modules|\.git)(\/|$)|\/Observability\/out\
 const sha = (p: string): string | null => {
   try { return createHash("sha256").update(readFileSync(p)).digest("hex") } catch { return null }
 }
+
+// ── Known-official set (B2): a live file whose hash is a known official fingerprint for its
+// path is safe to overwrite with B (it's some official version, not ours). The set accumulates
+// across releases in KNOWN; each run ingests the current release's MANIFEST so it counts going
+// forward. Off the list ⇒ ours ⇒ never auto-overwritten (REVIEW / merge). --old stays as an
+// optional bootstrap accelerator for the first run before any manifest history exists.
+function parseHashList(p: string): Array<[string, string]> {   // sha256sum format: `<hash>  <path>`
+  if (!existsSync(p)) return []
+  const out: Array<[string, string]> = []
+  for (const line of readFileSync(p, "utf8").split("\n")) {
+    const m = line.match(/^([0-9a-f]{64})\s+(.+)$/)
+    if (m) out.push([m[1], m[2].trim()])
+  }
+  return out
+}
+const known = new Map<string, Set<string>>()
+const addKnown = (h: string, p: string) => { let s = known.get(p); if (!s) known.set(p, s = new Set()); s.add(h) }
+for (const [h, p] of parseHashList(KNOWN)) addKnown(h, p)          // accumulated history
+const manifestFound = existsSync(MANIFEST)
+for (const [h, p] of parseHashList(MANIFEST)) addKnown(h, p)       // this release (B) → official henceforth
 
 function* walk(dir: string): Generator<string> {
   if (!existsSync(dir)) return
@@ -63,9 +85,11 @@ for (const root of ROOTS) {
     if (!existsSync(lf)) { buckets.ADD.push(rel); continue }
     const b = sha(nf), l = sha(lf)
     if (l === b) { buckets.CURRENT.push(rel); continue }
-    const a = OLD ? sha(join(OLD, rel)) : null
-    if (a && l === a) buckets.TAKE_B.push(rel)   // A∩B: živ == star-uradni → varno prepiši z B
-    else buckets.REVIEW.push(rel)                 // ≠A ≠B: star-uradni ALI najin → safe-default skill/human
+    // A-detection: live is a known official hash for this path (any release) → safe overwrite with B.
+    const officialByManifest = l != null && (known.get(rel)?.has(l) ?? false)
+    const officialByOld = OLD ? l === sha(join(OLD, rel)) : false
+    if (officialByManifest || officialByOld) buckets.TAKE_B.push(rel)   // A∩B: known-official older version
+    else buckets.REVIEW.push(rel)   // off the list ⇒ ours / diverged: official has an update AND live changed → MERGE-candidate (B3 skill), never blind overwrite
   }
 }
 
@@ -90,16 +114,19 @@ for (const rel of (arg("--approve", "") as string).split(",").map(s => s.trim())
 }
 
 const line = (b: Bucket, desc: string) => console.log(`  ${b.padEnd(8)} ${String(buckets[b].length).padStart(4)}  — ${desc}`)
+const knownPaths = known.size, knownHashes = [...known.values()].reduce((n, s) => n + s.size, 0)
 console.log(`\n════ payload-sync DRY-RUN (roots: ${ROOTS.join(", ")}) ════`)
-console.log(`  new(B):  ${NEW}`)
-console.log(`  old(A):  ${OLD ?? "(brez — A∩B se ne loči od REVIEW)"}`)
-console.log(`  live:    ${LIVE}\n`)
+console.log(`  new(B):    ${NEW}`)
+console.log(`  manifest:  ${manifestFound ? MANIFEST : "(brez — B2 detekcija degradirana; live≠B → REVIEW)"}`)
+console.log(`  known:     ${knownPaths} poti / ${knownHashes} uradnih hashev (akumulator: ${existsSync(KNOWN) ? KNOWN : "nov"})`)
+console.log(`  old(A):    ${OLD ?? "(brez — fallback ni v rabi)"}`)
+console.log(`  live:      ${LIVE}\n`)
 line("CURRENT", "živ == B, že svež → skip")
-line("TAKE_B", "živ == star-uradni (A∩B) → determinističen prepis z B")
+line("TAKE_B", "živ == znan-uradni hash (A∩B) → determinističen prepis z B")
 line("ADD", "nov fajl → copy-missing")
-line("REVIEW", "≠A ≠B (star-uradni ALI najin) → SKILL/human, nikoli slep prepis")
+line("REVIEW", "off-list ⇒ najin/diverged → MERGE-kandidat (B3 skill), nikoli slep prepis")
 line("DELETE", "A brez B (uradni izbris) → briši (z backupom)")
-console.log(`\n── REVIEW (o teh presoja skill/human): ──`)
+console.log(`\n── REVIEW (merge-kandidati — uradni ima update IN živ je spremenjen; skill/human zlije): ──`)
 for (const r of buckets.REVIEW) console.log("   " + r)
 if (buckets.DELETE.length) { console.log(`\n── DELETE kandidati: ──`); for (const r of buckets.DELETE) console.log("   " + r) }
 
@@ -128,9 +155,22 @@ for (const rel of buckets.ADD)   { const d = join(LIVE, rel); mkdirSync(dirname(
 for (const rel of buckets.DELETE){ backup(rel); rmSync(join(LIVE, rel)); deleted++ }
 // REVIEW + CURRENT: NIKOLI ne piše.
 
+// Persist the accumulated known-official set (monotonic across releases): this release's
+// MANIFEST is now folded in, so future runs recognize these hashes as official. Only on
+// --apply (dry-run stays read-only). Sorted by path for a stable, diffable file.
+let persistedKnown = 0
+if (manifestFound) {
+  const lines: string[] = []
+  for (const [p, hs] of known) for (const h of hs) { lines.push(`${h}  ${p}`); persistedKnown++ }
+  lines.sort((a, b) => (a.slice(66) < b.slice(66) ? -1 : a.slice(66) > b.slice(66) ? 1 : 0))
+  mkdirSync(dirname(KNOWN), { recursive: true })
+  writeFileSync(KNOWN, lines.join("\n") + "\n")
+}
+
 console.log(`\n════ APPLY izveden ════`)
 console.log(`  TAKE_B prepisanih:  ${took}`)
 console.log(`  ADD dodanih:        ${added}`)
 console.log(`  DELETE izbrisanih:  ${deleted}`)
+console.log(`  known-official:     ${persistedKnown} hashev ${manifestFound ? "→ " + KNOWN : "(brez manifesta — ni posodobljen)"}`)
 console.log(`  REVIEW NEDOTAKNJEN: ${buckets.REVIEW.length} (skill/human)`)
 console.log(`  backup:             ${BACKUP}\n`)
