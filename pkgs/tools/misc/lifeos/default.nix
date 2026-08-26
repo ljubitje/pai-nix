@@ -106,6 +106,13 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     install -m 0644 ${./files/derived-watch.ts} \
       $out/share/lifeos/LifeOS/install/LIFEOS/PULSE/modules/derived-watch.ts
 
+    # 1c) payload-sync — lifeos-nix store→live durability tool. Deploy is copy-missing-only,
+    # so a rebuilt store never refreshes EXISTING live files; this classifies each and, with
+    # --apply, deterministically syncs changes into ~/.claude (backup + verify). lifeos-nix-
+    # specific (vanilla edits live directly, no store↔live split) → shipped, not patched.
+    install -m 0755 ${./files/payload-sync.ts} \
+      $out/share/lifeos/LifeOS/install/LIFEOS/TOOLS/payload-sync.ts
+
     # 2) Place vendored node_modules per tree (bridged into $CFG at runtime).
     cp -r ${deps.root}      $out/share/lifeos/LifeOS/install/node_modules
     cp -r ${deps.pulse}     $out/share/lifeos/LifeOS/install/LIFEOS/PULSE/node_modules
