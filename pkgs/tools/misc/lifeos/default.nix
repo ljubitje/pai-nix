@@ -14,7 +14,7 @@
   claude-code,
 }:
 let
-  version = "7.1.1.0"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .0 = first packaging
+  version = "7.1.1.1"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .1 = tilde-fix + payload-sync tool + MANIFEST + F8 re-val
   src = fetchFromGitHub {
     owner = "danielmiessler";
     repo = "LifeOS";
