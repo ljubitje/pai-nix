@@ -34,8 +34,8 @@ CLAUDE_BIN="$(grep -oE '/nix/store/[^:"]*-claude-code-[^/"]*/bin' "$OUT/bin/life
 PTH="$BUN_BIN:$CLAUDE_BIN:/run/current-system/sw/bin:/usr/bin:/bin"
 
 echo "-- confirm the built pulse.ts actually carries the fix --"
-if grep -q 'resolveRef' "$SKILL/install/LIFEOS/PULSE/pulse.ts" && grep -q 'import { homedir } from "os"' "$SKILL/install/LIFEOS/PULSE/pulse.ts"; then
-  echo "  ok   patched pulse.ts in store (resolveRef + homedir import)"
+if grep -q 'resolveRef' "$SKILL/install/LIFEOS/PULSE/pulse.ts" && grep -qE 'import \{ homedir \} from "(node:)?os"' "$SKILL/install/LIFEOS/PULSE/pulse.ts"; then
+  echo "  ok   pulse.ts carries the tilde fix (resolveRef + homedir import; upstream-adopted in 7.40.4, our patch dissolved)"
 else
   echo "  FAIL patched pulse.ts missing the fix in the built payload"; exit 2
 fi

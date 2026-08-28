@@ -105,10 +105,10 @@ ln -sfn "$SKILL/install/LIFEOS/TOOLS/node_modules"               "$CFG/LIFEOS/TO
 echo "-- Pulse daemon boot (deployed tree, ~15s, SIGKILL) --"
 isolate "$CFGHOME" 15 "$WORK/traces/pulse.strace" bash -c "cd '$CFG/LIFEOS/PULSE' && exec bun run pulse.ts"
 report "pulse-boot" "$WORK/traces/pulse.strace"
-if grep -q '"voice":false' "$WORK/traces/pulse.strace.out" && grep -q '"telegram":false' "$WORK/traces/pulse.strace.out"; then
-  echo "  ok    pulse-boot — voice+telegram modules OFF at runtime (f4-c load-bearing)"
+if grep -q '"voice":false' "$WORK/traces/pulse.strace.out"; then
+  echo "  ok    pulse-boot — voice module OFF at runtime (f4-c load-bearing; telegram module removed upstream in 7.40.4)"
 else
-  echo "  WARN  could not confirm voice/telegram OFF in boot log"
+  echo "  WARN  could not confirm voice OFF in boot log"
 fi
 
 echo "== result =="

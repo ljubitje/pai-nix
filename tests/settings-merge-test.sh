@@ -13,8 +13,8 @@
 #      absent template keys are added (env expanded, no literal $HOME); a backup
 #      is written; hooks merge in.
 #   C. IDEMPOTENCE (second run over A): settings.json semantically unchanged, no
-#      duplicate hook registrations, and the f4-c privacy defaults in PULSE.toml
-#      (voice/telegram off) survive the re-install merge (ISC-75).
+#      duplicate hook registrations, and the f4-c privacy default in PULSE.toml
+#      (voice off; telegram module removed upstream in 7.40.4) survives the re-install merge (ISC-75).
 #
 # The chain below mirrors install_core in default.nix (minus manage.sh + Doctor,
 # which are service/network domain — covered by egress-test.sh). Keep in sync.
@@ -44,17 +44,22 @@ echo "   out=$OUT"
 run_chain() {
   local home="$1" cfg="$1/.claude" step
   mkdir -p "$cfg"
+  # Pin LIFEOS_CONFIG_DIR + LIFEOS_DIR to the scratch tree. ScaffoldUser resolves the XDG
+  # user-config dir from LIFEOS_CONFIG_DIR (falling back to $HOME/.config/LIFEOS); overriding
+  # only HOME is NOT enough when this runs inside a live LifeOS session that exports
+  # LIFEOS_CONFIG_DIR — activation would then escape the scratch dir and write into the real
+  # ~/.config/LIFEOS (additive, never overwrites, but non-hermetic + fails the A4 XDG check).
   for step in DeployCore ScaffoldUser LinkUser; do
-    HOME="$home" bun "$SKILL/Tools/$step.ts" --skill-root "$SKILL" --config-root "$cfg" --apply \
+    HOME="$home" LIFEOS_CONFIG_DIR="$home/.config/LIFEOS" LIFEOS_DIR="$cfg/LIFEOS" bun "$SKILL/Tools/$step.ts" --skill-root "$SKILL" --config-root "$cfg" --apply \
       >>"$home/chain.log" 2>&1 || { fail "chain step $step (exit $?)"; return 1; }
   done
   [ -e "$cfg/CLAUDE.md" ] || install -m 0644 "$SKILL/install/CLAUDE.template.md" "$cfg/CLAUDE.md"
   for step in InstallSettings InstallHooks ActivateImports; do
-    HOME="$home" bun "$SKILL/Tools/$step.ts" --skill-root "$SKILL" --config-root "$cfg" --apply \
+    HOME="$home" LIFEOS_CONFIG_DIR="$home/.config/LIFEOS" LIFEOS_DIR="$cfg/LIFEOS" bun "$SKILL/Tools/$step.ts" --skill-root "$SKILL" --config-root "$cfg" --apply \
       >>"$home/chain.log" 2>&1 || { fail "chain step $step (exit $?)"; return 1; }
   done
   ln -sfn "$SKILL/install/node_modules" "$cfg/node_modules"
-  HOME="$home" bun "$SKILL/Tools/DeployComponents.ts" --config-root "$cfg" \
+  HOME="$home" LIFEOS_CONFIG_DIR="$home/.config/LIFEOS" LIFEOS_DIR="$cfg/LIFEOS" bun "$SKILL/Tools/DeployComponents.ts" --config-root "$cfg" \
     --components statusline,tooltips,spinnerverbs,agents,commands --apply \
     >"$home/dc.json" 2>>"$home/chain.log" || { fail "chain step DeployComponents (exit $?)"; return 1; }
   chmod -R u+w "$cfg"
@@ -90,9 +95,8 @@ python3 -c "import json,sys; r=json.load(open('$A/dc.json')); sys.exit(0 if all(
   ; check $? "A5b DeployComponents: every component applied + own probe passed"
 NONWRIT="$(find "$ACFG" "$A/.config/LIFEOS" -type f ! -writable 2>/dev/null | wc -l)"
 [ "$NONWRIT" -eq 0 ]; check $? "A6 config-root + XDG user-config fully user-writable ($NONWRIT read-only files)"
-grep -A2 '^\[voice\]' "$ACFG/LIFEOS/PULSE/PULSE.toml" | grep -q 'enabled = false' &&
-grep -A2 '^\[telegram\]' "$ACFG/LIFEOS/PULSE/PULSE.toml" | grep -q 'enabled = false'
-check $? "A7 f4-c privacy defaults present (voice+telegram off)"
+grep -A2 '^\[voice\]' "$ACFG/LIFEOS/PULSE/PULSE.toml" | grep -q 'enabled = false'
+check $? "A7 f4-c privacy default present (voice off; telegram module removed upstream in 7.40.4)"
 
 echo "-- scenario B: pre-existing user settings.json (clobber test) --"
 B="$WORK/b"; BCFG="$B/.claude"; mkdir -p "$BCFG"
@@ -124,9 +128,8 @@ cmp -s "$WORK/a-before.json" "$WORK/a-after.json"        ; check $? "C1 settings
 py "$SJ" "all(len({json.dumps(h,sort_keys=True) for h in v})==len(v) for v in s['hooks'].values())" \
   ; check $? "C2 no duplicate hook registrations"
 py "$SJ" "len(s['hooks'])==$EXPECT_EVENTS"               ; check $? "C3 event count unchanged ($EXPECT_EVENTS)"
-grep -A2 '^\[voice\]' "$ACFG/LIFEOS/PULSE/PULSE.toml" | grep -q 'enabled = false' &&
-grep -A2 '^\[telegram\]' "$ACFG/LIFEOS/PULSE/PULSE.toml" | grep -q 'enabled = false'
-check $? "C4 f4-c privacy defaults survive re-install (ISC-75)"
+grep -A2 '^\[voice\]' "$ACFG/LIFEOS/PULSE/PULSE.toml" | grep -q 'enabled = false'
+check $? "C4 f4-c privacy default survives re-install (voice off; telegram removed upstream 7.40.4) (ISC-75)"
 NONWRIT2="$(find "$ACFG" "$A/.config/LIFEOS" -type f ! -writable 2>/dev/null | wc -l)"
 [ "$NONWRIT2" -eq 0 ]; check $? "C5 config-root + XDG user-config still fully writable"
 
