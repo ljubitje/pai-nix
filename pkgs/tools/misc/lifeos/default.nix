@@ -194,6 +194,11 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       ln -sfn "$SKILL/install/LIFEOS/PULSE/Observability/node_modules" "$CFG/LIFEOS/PULSE/Observability/node_modules"
       ln -sfn "$SKILL/install/LIFEOS/TOOLS/node_modules"               "$CFG/LIFEOS/TOOLS/node_modules"
       ln -sfn "$SKILL/install/LIFEOS/TOOLS/TokenXray/node_modules"     "$CFG/LIFEOS/TOOLS/TokenXray/node_modules"
+      # In-place skill trees whose .ts import deps directly (7.40.4 vendor pass). Bridged
+      # here so their vendored node_modules resolve offline — DeployCore's per-tree install
+      # is neutralized (f2 step e), so this symlink is the sole delivery path.
+      ln -sfn "$SKILL/install/skills/Evals/node_modules"                     "$CFG/skills/Evals/node_modules"
+      ln -sfn "$SKILL/install/skills/Prompting/Templates/Tools/node_modules" "$CFG/skills/Prompting/Templates/Tools/node_modules"
     }
 
     install_core() {

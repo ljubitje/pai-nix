@@ -1,27 +1,38 @@
 lifeos-nix patch f2 — Skip runtime `bun install` in DeployCore (deps are Nix-vendored)
 
 PROBLEM
-  `LifeOS/Tools/DeployCore.ts` runs `bun install` in configRoot at activation time,
-  reaching the npm registry from a user machine at first launch (RedTeam CR-3).
+  DeployCore.ts runs `bun install` at activation time, reaching the npm registry from a
+  user machine at first launch (RedTeam CR-3). 7.40.4 does this in TWO places:
+    (d) deployDependencies      — one `bun install` in configRoot (the original CR-3 spot)
+    (e) deployNestedDependencies — NEW (PR #1581/#1605/#1739): walks the runtime tree +
+        every shipped skill dir and runs `bun install --cwd` per package.json, plus a
+        Next.js build of the Observability dashboard. Unpatched, this re-opens the exact
+        egress hole f2 closed, and breaks offline/hermetic activation.
 
 ROOT CAUSE
   Upstream's AI-native install assumes deps are fetched at activation; Nix packaging
   requires all deps resolved at build time (fixed-output derivations, offline).
 
 SCOPE
-  Touches only DeployCore.ts. All five node_modules trees are vendored into the store
-  by the derivation and bridged into configRoot by the `lifeos` launcher, so the
-  runtime install step is dead weight + an egress hole; replaced with a no-op action.
+  Touches only DeployCore.ts, neutralizing BOTH install paths (d + e). node_modules are
+  vendored into the store by the derivation and bridged into configRoot by the `lifeos`
+  launcher (the 5 core trees + the in-place skill trees Evals/Prompting). Un-bridged skill
+  trees are either external-service-dead (deliberately unvendored) or runtime-instantiated
+  templates. The Observability dashboard ships pre-built (out/index.html) from the
+  derivation, so step (e)'s rebuild is dead weight too.
 
 VERIFICATION
-  ISC-133 egress test: full DeployCore activation chain in a deny-all rootless netns
-  with strace — zero external connect() attempts, activation exit 0. Build green.
+  ISC-133 egress test: full DeployCore activation chain in a deny-all rootless netns with
+  strace — zero external connect() attempts, activation exit 0. Build green.
 
-Generated via `diff -u` against pristine 7.1.1 src.
+RE-PORTED to upstream v7.40.4 (be9e8ef): step (e) is new since 7.1.1; regenerated against
+7.40.4 source to cover both install paths.
 
+diff --git a/LifeOS/Tools/DeployCore.ts b/LifeOS/Tools/DeployCore.ts
+index 4564b6e..310e2d8 100755
 --- a/LifeOS/Tools/DeployCore.ts
 +++ b/LifeOS/Tools/DeployCore.ts
-@@ -153,13 +153,11 @@
+@@ -214,13 +214,11 @@ function deployDependencies(payloadInstall: string, configRoot: string, apply: b
    const { copied, failures } = copyMissing(src, dst);
    r.copied = copied;
    r.failures = failures;
@@ -36,6 +47,38 @@ Generated via `diff -u` against pristine 7.1.1 src.
 -      r.actions.push(`bun install --cwd ${configRoot}`);
 -    }
 +    r.actions.push("bun install skipped (Nix-vendored node_modules bridged by launcher)");
+   }
+   return r;
+ }
+@@ -304,23 +302,14 @@ function deployNestedDependencies(payloadInstall: string, configRoot: string, ap
+       continue;
+     }
+ 
+-    const proc = Bun.spawnSync(["bun", "install"], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+-    if (proc.exitCode !== 0) {
+-      r.failures.push(`bun install --cwd ${dir} exited ${proc.exitCode}: ${proc.stderr.toString().trim()}`);
+-      continue;
+-    }
+-    r.copied++;
+-    r.actions.push(`bun install --cwd ${dir}`);
+-
+-    // Build the Observability dashboard once its deps resolve — see comment above.
+-    if (needsBuild) {
+-      const build = Bun.spawnSync(["bun", "run", "build"], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+-      if (build.exitCode !== 0) {
+-        r.failures.push(`bun run build --cwd ${dir} exited ${build.exitCode}: ${build.stderr.toString().trim()}`);
+-      } else {
+-        r.actions.push(`bun run build --cwd ${dir}`);
+-      }
+-    }
++    // lifeos-nix (f2, extended to step e / PR #1581,#1605,#1739): runtime per-tree
++    // `bun install` + the Observability rebuild are removed. node_modules are Nix-vendored
++    // into the store and bridged into configRoot by the `lifeos` launcher (the 5 core trees
++    // + the in-place skill trees Evals/Prompting); the un-bridged skill trees are either
++    // dead (external-service, deliberately unvendored) or runtime-instantiated templates.
++    // The Observability dashboard ships pre-built (out/index.html) from the derivation.
++    // Running npm here is dead weight + reopens the CR-3 egress hole — skip it, stay offline.
++    r.actions.push(`bun install skipped for ${dir} (Nix-vendored node_modules bridged by launcher)`);
    }
    return r;
  }
