@@ -9,72 +9,118 @@ PROBLEM
 
 FIX (invert the default)
   Default is now stay-in-current-directory. Opt in to the config root with --claude-dir / -c.
-  --local is kept as a no-op alias for the now-default behavior (back-compat for existing use).
-  Both the interactive launch (cmdLaunch) and the one-shot (cmdPrompt) paths honor this; the
-  one-shot's unconditional chdir is removed. CLI flag, dispatch, help text, and docstring updated.
+  --local is kept as a no-op alias for the now-default behavior (back-compat). Both the
+  interactive launch (cmdLaunch) and the one-shot (cmdPrompt) honor this; the one-shot's
+  unconditional chdir is removed. CLI flag, dispatch, KNOWN_FLAGS allowlist, help text, and
+  docstring updated.
+
+  GUARD RE-KEY (7.40.4 migration, 2026-08-27): 7.40.4 added a worktree-safety guard (public
+  PR #1579) keyed on `options.local` — it refuses a main-checkout-with-worktrees launch that
+  would run on the parked branch. That guard protects the STAY-IN-CWD behaviour, but keys on
+  the --local FLAG. Our default-inversion divorces the two: stay-in-cwd becomes the flag-less
+  default, so a guard reading `options.local` would go silent for the exact dangerous case it
+  exists to catch. Re-keyed to `!options.claudeDir` so it fires whenever the session actually
+  stays in cwd (the new default); a --claude-dir session cd's away and correctly skips it.
 
 SCOPE / CO-EXISTENCE
-  One file (lifeos.ts): cmdLaunch / cmdPrompt / arg-parse / help. Disjoint from f4-a, which
-  touches only the update-check functions (getLatestVersion / cmdUpdate). No other patch
-  touches lifeos.ts. Applied last, so the diff is against the f4-a-patched tree.
+  One file (lifeos.ts): docstring / cmdLaunch (sig + guard + chdir) / cmdPrompt / help /
+  KNOWN_FLAGS / arg-parse / dispatch. Disjoint from f4-a (update-check fns only). Re-generated
+  against the 7.40.4 tree (2026-08-27 migration).
 
 VERIFICATION
-  `bun build --target bun` parses; hunks via diff -u. `lifeos` now stays in cwd; `lifeos -c`
-  runs in ~/.claude; `lifeos --local` still works (no-op).
+  `lifeos` stays in cwd; `lifeos -c` runs in ~/.claude; `lifeos --local` still works (no-op);
+  the worktree guard still fires on a default (flag-less) launch in a main checkout. Hunks via
+  `git diff`, never hand-counted.
 
+diff --git a/LifeOS/install/LIFEOS/TOOLS/lifeos.ts b/LifeOS/install/LIFEOS/TOOLS/lifeos.ts
+index 5ccae12..d6f0005 100755
 --- a/LifeOS/install/LIFEOS/TOOLS/lifeos.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/lifeos.ts
-@@ -10,7 +10,7 @@
-  *   k -m bd            Launch with Bright Data MCP
-  *   k -m bd,ap         Launch with multiple MCPs
-  *   k -r / --resume    Resume a session (picker, or pass a session ID)
-- *   k --local          Stay in current directory (don't cd to ~/.claude)
-+ *   k --claude-dir     Run in ~/.claude (LifeOS config root); default is now the current dir
-  *   k update           Update Claude Code
-  *   k version          Show version info
-  *   k profiles         List available profiles
-@@ -391,7 +391,7 @@
+@@ -11,7 +11,7 @@
+  *   lifeos -m bd       Launch with Bright Data MCP
+  *   lifeos -m bd,ap    Launch with multiple MCPs
+  *   lifeos -r / --resume  Resume a session (picker, or pass a session ID)
+- *   lifeos --local     Stay in current directory (don't cd to ~/.claude)
++ *   lifeos -c / --claude-dir  Run in ~/.claude (config root); default is now the current dir
+  *   lifeos -- <flags...>  Forward everything after -- verbatim to `claude`
+  *   lifeos update      Update Claude Code
+  *   lifeos version     Show version info
+@@ -489,7 +489,7 @@ function cmdWallpaper(args: string[]) {
  // Commands
  // ============================================================================
  
--async function cmdLaunch(options: { mcp?: string; resume?: boolean; resumeId?: string; local?: boolean; systemPrompt?: string }) {
-+async function cmdLaunch(options: { mcp?: string; resume?: boolean; resumeId?: string; local?: boolean; claudeDir?: boolean; systemPrompt?: string }) {
+-async function cmdLaunch(options: { mcp?: string; resume?: boolean; resumeId?: string; local?: boolean; systemPrompt?: string; passthrough?: string[] }) {
++async function cmdLaunch(options: { mcp?: string; resume?: boolean; resumeId?: string; local?: boolean; claudeDir?: boolean; systemPrompt?: string; passthrough?: string[] }) {
    // CLAUDE.md is now static — no build step needed.
    // Algorithm spec is loaded on-demand when Algorithm mode triggers.
    // (InstantiatePAI.ts is retired — kept for reference only)
-@@ -425,8 +425,10 @@
+@@ -524,20 +524,27 @@ async function cmdLaunch(options: { mcp?: string; resume?: boolean; resumeId?: s
      }
+   }
+ 
+-  // Guard (public PR #1579, @asdf8675309): --local launches Claude in the
+-  // CURRENT directory. If that's a repo's main checkout (not a worktree) and
+-  // the repo uses .claude/worktrees, the whole session would run on whatever
+-  // stale branch the root is parked on. Refuse unless explicitly overridden.
+-  if (options.local && process.env.LIFEOS_ALLOW_ROOT !== "1" && inMainCheckoutWithWorktrees()) {
++  // Guard (public PR #1579, @asdf8675309): staying in the CURRENT directory is now the
++  // default (dev-first; see below). If that's a repo's main checkout (not a worktree) and
++  // the repo uses .claude/worktrees, the whole session would run on whatever stale branch
++  // the root is parked on. Refuse unless explicitly overridden.
++  // lifeos-nix (f-launcher-cwd): re-keyed from `options.local` to `!options.claudeDir` — the
++  // guarded behaviour is staying-in-cwd, which is now the flag-less default, so the guard has
++  // to track the behaviour, not the (now no-op) --local flag. A --claude-dir session cd's
++  // away to the config root and is safe, so it correctly skips the guard.
++  if (!options.claudeDir && process.env.LIFEOS_ALLOW_ROOT !== "1" && inMainCheckoutWithWorktrees()) {
+     error(
+       "You're in the main checkout root, not a worktree.\n" +
+-        "   A --local session here runs on whatever branch the root is parked on.\n" +
+-        "   cd into a worktree first, or set LIFEOS_ALLOW_ROOT=1 to override.",
++        "   A session here runs on whatever branch the root is parked on.\n" +
++        "   cd into a worktree first, run with --claude-dir, or set LIFEOS_ALLOW_ROOT=1 to override.",
+     );
    }
  
 -  // Change to LifeOS directory unless --local flag is set
 -  if (!options.local) {
-+  // Stay in the current directory by default (dev-first: the session sees the project it was
-+  // launched from). Opt in to the LifeOS config root (~/.claude) with --claude-dir / -c.
-+  // (--local is retained as a no-op alias for the now-default behavior.)
++  // lifeos-nix (f-launcher-cwd): stay in the current directory by default (dev-first — the
++  // session sees the project it was launched from). Opt into the LifeOS config root
++  // (~/.claude) with --claude-dir / -c. (--local is retained as a no-op alias for the
++  // now-default behaviour.)
 +  if (options.claudeDir) {
      process.chdir(CLAUDE_DIR);
    }
  
-@@ -555,7 +557,7 @@
+@@ -706,7 +713,8 @@ async function cmdPrompt(prompt: string) {
      args.push("--append-system-prompt-file", systemPromptFile);
    }
  
 -  process.chdir(CLAUDE_DIR);
-+  // One-shot stays in the current directory (same dev-first default as interactive launches).
++  // lifeos-nix (f-launcher-cwd): one-shot stays in the current directory (same dev-first
++  // default as interactive launches); the unconditional chdir to the config root is removed.
  
    const env: Record<string, string> = { ...process.env } as Record<string, string>;
    delete env.ANTHROPIC_API_KEY;
-@@ -579,7 +581,8 @@
-   k -m bd,ap               Launch with multiple MCPs
-   k -r, --resume [id]      Resume a session (interactive picker, or a specific session ID)
-   k -s, --system-prompt    System prompt file to append (default: LIFEOS_SYSTEM_PROMPT.md)
--  k -l, --local            Stay in current directory (don't cd to ~/.claude)
-+  k -c, --claude-dir       Run in the LifeOS config root (~/.claude) instead of the current dir
-+  k -l, --local            (now the default; retained as a no-op) stay in the current directory
+@@ -730,7 +738,8 @@ USAGE:
+   lifeos -m bd,ap          Launch with multiple MCPs
+   lifeos -r, --resume [id]  Resume a session (interactive picker, or a specific session ID)
+   lifeos -s, --system-prompt  System prompt file to append (default: LIFEOS_SYSTEM_PROMPT.md)
+-  lifeos -l, --local       Stay in current directory (don't cd to ~/.claude)
++  lifeos -c, --claude-dir  Run in the LifeOS config root (~/.claude) instead of the current dir
++  lifeos -l, --local       (now the default; retained as a no-op) stay in the current directory
+   lifeos -- <flags...>     Forward everything after -- straight to \`claude\`
  
  COMMANDS:
-   k update                 Update Claude Code to latest version
-@@ -633,6 +636,7 @@
+@@ -793,7 +802,7 @@ async function main() {
+   // and the default branch below would otherwise silently drop it all over again
+   // (public issue #1690, @catchingknives).
+   const KNOWN_FLAGS = new Set([
+-    "-m", "--mcp", "-r", "--resume", "-s", "--system-prompt", "-l", "--local",
++    "-m", "--mcp", "-r", "--resume", "-s", "--system-prompt", "-l", "--local", "-c", "--claude-dir",
+     "-v", "--version", "-h", "--help", "-p", "-w", "--wallpaper", "--",
+   ]);
+   if (args[0].startsWith("-") && !KNOWN_FLAGS.has(args[0])) {
+@@ -806,6 +815,7 @@ async function main() {
    let resume = false;
    let resumeId: string | undefined;
    let local = false;
@@ -82,12 +128,12 @@ VERIFICATION
    let systemPrompt: string | undefined;
    let command: string | undefined;
    let subCommand: string | undefined;
-@@ -670,7 +674,11 @@
+@@ -845,7 +855,11 @@ async function main() {
          break;
        case "-l":
        case "--local":
 -        local = true;
-+        local = true; // retained no-op: stay-in-cwd is now the default
++        local = true; // lifeos-nix (f-launcher-cwd): retained no-op — stay-in-cwd is now the default
 +        break;
 +      case "-c":
 +      case "--claude-dir":
@@ -95,12 +141,12 @@ VERIFICATION
          break;
        case "-v":
        case "--version":
-@@ -747,7 +755,7 @@
+@@ -935,7 +949,7 @@ async function main() {
        break;
      default:
        // Launch with options
--      await cmdLaunch({ mcp, resume, resumeId, local, systemPrompt });
-+      await cmdLaunch({ mcp, resume, resumeId, local, claudeDir, systemPrompt });
+-      await cmdLaunch({ mcp, resume, resumeId, local, systemPrompt, passthrough });
++      await cmdLaunch({ mcp, resume, resumeId, local, claudeDir, systemPrompt, passthrough });
    }
  }
  

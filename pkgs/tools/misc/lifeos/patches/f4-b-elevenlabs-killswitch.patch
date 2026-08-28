@@ -1,36 +1,40 @@
 lifeos-nix patch f4-b — Hard-kill the ElevenLabs cloud-TTS egress (keep local seam)
 
 PROBLEM
-  Three files reach api.elevenlabs.io for cloud text-to-speech:
+  Two files reach api.elevenlabs.io for cloud text-to-speech in 7.40.4:
     - LIFEOS/PULSE/VoiceServer/voice.ts   generateSpeech()   POST /v1/text-to-speech/{id}
-    - LIFEOS/PULSE/modules/telegram.ts    synthesizeDaVoice() POST /v1/text-to-speech/{id}
     - LIFEOS/TOOLS/Doctor.ts              voice probeNetwork() POST /v1/text-to-speech/{id}
   Klemen's cut (ISA F4 decision, 2026-08-02): the ElevenLabs HTTP call is removed so
   voice is dead REGARDLESS of whether a key is set — stronger than relying on the
   no-key-shipped default. Honors the point-1 invariant (egress ⊆ {Anthropic}).
+
+  NOTE (7.40.4 migration, 2026-08-27): the third egress point of the original patch —
+  LIFEOS/PULSE/modules/telegram.ts synthesizeDaVoice() — is GONE. Upstream removed the
+  telegram module entirely in 7.40.4 (no telegram.ts, no synthesizeDaVoice, no elevenlabs
+  fetch there), so that hunk is obsolete and dropped. `grep -rn api.elevenlabs.io` over
+  7.40.4 confirms exactly the two files above.
 
 FIX (surgical; url + fetch removed in each)
   - voice.ts generateSpeech(): throw before any URL/fetch. The generateSpeech seam is
     kept intact on purpose — a LOCAL engine (e.g. Piper) can be slotted in here to
     return an ArrayBuffer, and the local audio-player path (ffplay/mpg123/paplay/aplay)
     below is untouched. Only the cloud synth dies.
-  - telegram.ts synthesizeDaVoice(): throw before any URL/fetch. sendVoiceSummary()
-    already guards on ELEVENLABS_API_KEY and swallows failures at WARN → throw is inert
-    on the default no-key path, load-bearing if a key is ever present.
   - Doctor.ts voice probeNetwork(): return not-OK without the POST. Cloud voice is
     Doctor-declined by default in this build, so the probe never needed to reach out.
 
 SCOPE / CO-EXISTENCE
-  Three files, one hunk each. Disjoint from f4-a (lifeos.ts) and f2 (DeployCore.ts).
-  Re-cut of the v5.0 intent behind 0026/0027 against the 7.1.1 tree paths.
+  Two files, one hunk each. Disjoint from f4-a (lifeos.ts) and f2 (DeployCore.ts).
+  Re-generated against the 7.40.4 tree (2026-08-27 migration).
 
 VERIFICATION
   `rg 'api\.elevenlabs\.io'` over the patched files returns no fetch call (comments
-  only). Hunks generated via `diff -u`, never hand-counted.
+  only). Hunks generated via `git diff`, never hand-counted.
 
+diff --git a/LifeOS/install/LIFEOS/PULSE/VoiceServer/voice.ts b/LifeOS/install/LIFEOS/PULSE/VoiceServer/voice.ts
+index 0f0d2d3..c4da3d8 100644
 --- a/LifeOS/install/LIFEOS/PULSE/VoiceServer/voice.ts
 +++ b/LifeOS/install/LIFEOS/PULSE/VoiceServer/voice.ts
-@@ -313,36 +313,13 @@
+@@ -324,36 +324,13 @@ async function generateSpeech(
    voiceId: string,
    voiceSettings: ElevenLabsVoiceSettings,
  ): Promise<ArrayBuffer> {
@@ -74,45 +78,11 @@ VERIFICATION
  }
  
  // ── Audio Playback ──
---- a/LifeOS/install/LIFEOS/PULSE/modules/telegram.ts
-+++ b/LifeOS/install/LIFEOS/PULSE/modules/telegram.ts
-@@ -615,27 +615,12 @@
-  * Buffer via grammY's InputFile constructor.
-  */
- export async function synthesizeDaVoice(text: string): Promise<Buffer> {
--  const url = `https://api.elevenlabs.io/v1/text-to-speech/${DA_VOICE_ID}?output_format=opus_48000_64`
--  const spokenText = disambiguateHomographs(text)
--  const res = await fetch(url, {
--    method: "POST",
--    headers: {
--      "Content-Type": "application/json",
--      "xi-api-key": ELEVENLABS_API_KEY,
--      "Accept": "audio/ogg",
--    },
--    body: JSON.stringify({
--      text: spokenText,
--      model_id: "eleven_turbo_v2_5",
--      voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0, speed: 1.0, use_speaker_boost: true },
--    }),
--  })
--  if (!res.ok) {
--    const body = await res.text().catch(() => "<unreadable>")
--    throw new Error(`ElevenLabs ${res.status}: ${body.slice(0, 200)}`)
--  }
--  const ab = await res.arrayBuffer()
--  return Buffer.from(ab)
-+  // lifeos-nix: cloud TTS egress hard-killed. The api.elevenlabs.io URL and its fetch are
-+  // removed outright, so Telegram voice summaries can never phone out regardless of key.
-+  // Callers (sendVoiceSummary) already guard on ELEVENLABS_API_KEY and swallow failures
-+  // at WARN, so this throw is inert on the default (no-key) path.
-+  void text
-+  throw new Error("lifeos-nix: cloud TTS (ElevenLabs) disabled — no external voice egress")
- }
- 
- /**
+diff --git a/LifeOS/install/LIFEOS/TOOLS/Doctor.ts b/LifeOS/install/LIFEOS/TOOLS/Doctor.ts
+index 9ac4d38..d9254af 100644
 --- a/LifeOS/install/LIFEOS/TOOLS/Doctor.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/Doctor.ts
-@@ -198,32 +198,10 @@
+@@ -422,38 +422,10 @@ const CAPS: CapSpec[] = [
          : { ok: false, detail: 'API key set but no ELEVENLABS_VOICE_ID configured' };
      },
      probeNetwork: async () => {
@@ -138,7 +108,13 @@ VERIFICATION
 -        if (errText.includes('famous_voice_not_permitted')) {
 -          return { ok: false, detail: 'configured voice is a famous voice — not usable via API TTS' };
 -        }
--        return { ok: false, detail: `TTS failed (${res.status})` };
+-        // Plan-tier restriction, not quota (public issue #1496, @waveman2020-sudo):
+-        // free-tier keys 402 with paid_plan_required on ANY library voice — swapping
+-        // voices or waiting for quota reset does not fix it.
+-        if (errText.includes('paid_plan_required')) {
+-          return { ok: false, detail: 'free-tier ElevenLabs plan cannot use library voices via API — upgrade the plan or use a premade/cloned voice' };
+-        }
+-        return { ok: false, detail: `TTS failed (${res.status}): ${errText.slice(0, 120)}` };
 -      } catch {
 -        return { ok: false, detail: 'ElevenLabs unreachable (offline or timeout)' };
 -      }

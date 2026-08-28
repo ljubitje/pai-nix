@@ -1,36 +1,43 @@
 lifeos-nix patch f-projects-dormant — do not force-load USER/PROJECTS.md at startup
 
 PROBLEM
-  PROJECTS.md is upstream's per-project routing/resume file. Setup step 8
-  (activateImports) uncomments its `@`-import in CLAUDE.md, and settings.system.json
-  lists it in postCompactRestore.fullFiles — so it is force-loaded at every session
-  start AND re-injected in full after every compaction. Unlike the identity files it
-  grows UNBOUNDED with project count: on a real multi-project install it measured ~53%
-  of startup context (~19.5k tokens) while any given session touches exactly one
-  project. That is pure overhead that competes for attention with the rules and
-  identity that actually matter. Project/resume state is already available on-demand
-  via the ContextSearch skill (session registry + per-project ISAs) and per-project
-  CLAUDE.md — the startup force-load duplicates a purpose better served lazily.
+  PROJECTS.md is upstream's per-project routing/resume file. Setup (activateImports)
+  uncomments its `@`-import in CLAUDE.md, so it is force-loaded at every session start.
+  Unlike the identity files it grows UNBOUNDED with project count: on a real multi-project
+  install it measured ~53% of startup context (~19.5k tokens) while any given session touches
+  exactly one project. Project/resume state is already available on-demand via ContextSearch
+  (session registry + per-project ISAs) and per-project CLAUDE.md — the startup force-load
+  duplicates a purpose better served lazily.
 
-FIX (2 files) — change the DEFAULT to dormant, keep it opt-in
-  InstallEngine.ts (activateImports) — skip `@LIFEOS/USER/PROJECTS.md`: leave it
-  commented in CLAUDE.md instead of uncommenting it. A user who wants PROJECTS.md as a
-  startup routing table can uncomment the line by hand; the capability is unchanged,
-  only the default. All other identity imports activate as before.
-  settings.system.json — drop "USER/PROJECTS.md" from postCompactRestore.fullFiles so
-  it is not re-injected after compaction either.
+FIX (1 file) — change the DEFAULT to dormant, keep it opt-in
+  InstallEngine.ts (activateImports; the logic ActivateImports.ts wraps) — skip
+  `@LIFEOS/USER/PROJECTS.md`: leave it commented in CLAUDE.md instead of uncommenting it. A
+  user who wants PROJECTS.md as a startup routing table can uncomment the line by hand; the
+  capability is unchanged, only the default. All other identity imports activate as before.
+
+  7.40.4 migration note (2026-08-27): the original patch had a SECOND hunk dropping
+  "USER/PROJECTS.md" from settings.system.json postCompactRestore.fullFiles. 7.40.4 REMOVED
+  the postCompactRestore mechanism from settings.system.json entirely (`grep -c
+  postCompactRestore settings.system.json` == 0), so that hunk dissolved and is dropped —
+  only the activateImports hunk remains, re-generated against 7.40.4's leaner activateImports.
+
+VERIFICATION
+  Post-install: CLAUDE.md still shows `# @LIFEOS/USER/PROJECTS.md` commented; the other
+  identity imports are activated. Hunk via `git diff`, never hand-counted.
 
 diff --git a/LifeOS/install/skills/LifeOS/Tools/InstallEngine.ts b/LifeOS/install/skills/LifeOS/Tools/InstallEngine.ts
+index b5b1b76..3aa3f70 100644
 --- a/LifeOS/install/skills/LifeOS/Tools/InstallEngine.ts
 +++ b/LifeOS/install/skills/LifeOS/Tools/InstallEngine.ts
-@@ -638,6 +638,14 @@
+@@ -757,6 +757,15 @@ export function activateImports(claudeMdPath: string, configRoot: string): { act
      const m = line.match(commented);
      if (!m) return line;
      const importPath = m[1] || m[2]; // e.g. @LIFEOS/USER/TELOS/PRINCIPAL_TELOS.md
-+    // Keep PROJECTS.md dormant (opt-in): it grows unbounded with project count and
-+    // dominates startup context (~50%+) while any given session touches one project.
-+    // Project/resume state is recalled on-demand via ContextSearch + per-project
-+    // ISA/CLAUDE.md. A user who wants it as a startup routing table can uncomment it.
++    // lifeos-nix (f-projects-dormant): keep PROJECTS.md dormant (opt-in). It grows
++    // unbounded with project count and dominates startup context (~50%+) while any
++    // given session touches one project. Project/resume state is recalled on-demand
++    // via ContextSearch + per-project ISA/CLAUDE.md. A user who wants it as a startup
++    // routing table can uncomment the line by hand; only the default changes.
 +    if (importPath === "@LIFEOS/USER/PROJECTS.md") {
 +      skipped.push(importPath);
 +      return line;
@@ -38,17 +45,3 @@ diff --git a/LifeOS/install/skills/LifeOS/Tools/InstallEngine.ts b/LifeOS/instal
      const rel = importPath.replace(/^@/, "");
      if (existsSync(join(configRoot, rel))) {
        activated.push(importPath);
-diff --git a/LifeOS/install/settings.system.json b/LifeOS/install/settings.system.json
---- a/LifeOS/install/settings.system.json
-+++ b/LifeOS/install/settings.system.json
-@@ -401,9 +401,7 @@
-   },
-   "postCompactRestore": {
-     "_docs": "System default files re-injected after compaction. User additions via EXTRA_COMPACT_RESTORE in LIFEOS_CONFIG.yaml.",
--    "fullFiles": [
--      "USER/PROJECTS.md"
--    ]
-+    "fullFiles": []
-   },
-   "contextDisplay": {
-     "compactionThreshold": 83,

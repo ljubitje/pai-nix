@@ -12,20 +12,60 @@ PROBLEM
 
 FIX (5 files) — remove the "projects" proposal kind + Tier-B/GC/freshness registrations
   MemoryTypes.ts    — drop PROJECTS_PATH, the "projects" ProposalTargetKind (union +
-                      ALL_PROPOSAL_KINDS + PROPOSAL_KIND_TO_FILES), and its self-test;
-                      subtype count 8 → 7.
-  MemoryReviewer.ts — drop "projects" from the proposal schema + routing doc line.
-  MutationTier.ts   — drop PROJECTS.md from TIER_B_FILES + its self-test expectation.
+                      ALL_PROPOSAL_KINDS + PROPOSAL_KIND_TO_FILES), its self-test, and
+                      the now-stale ALWAYS_LOADED_KINDS doc paragraph about "projects";
+                      subtype count 8 -> 7.
+  MemoryReviewer.ts — drop "projects" from the proposal schema union + the routing doc
+                      block + the "new projects" DO-SAVE mention.
+  MutationTier.ts   — drop PROJECTS.md from TIER_B_FILES + docstring + its self-test.
   ProposalGC.ts     — drop PROJECTS.md from the GC'd-proposals target list.
-  TelosFreshness.ts — drop the "projects" freshness entry (would nag forever once dormant).
+  TelosFreshness.ts — drop PROJECTS_PATH const, the "projects" registry entry, and the
+                      "projects" default-threshold entry (would nag forever once dormant).
   NOTE: WorkSweep.ts (reads PROJECTS.md for github [Project-Check] issues) and
   ContextAudit.ts (budget-lint) are READ-only paths that go dead once PROJECTS.md is
   dormant; left as harmless no-ops rather than excised.
+  RE-PORTED to upstream v7.40.4 (be9e8ef): MemoryReviewer/TelosFreshness hunks drifted
+  (PR #1832 reviewer text; pai->lifeos slug rename; new ALWAYS_LOADED_KINDS scope-gate
+  and default-threshold map). Regenerated fresh against 7.40.4 source.
 
+diff --git a/LifeOS/install/LIFEOS/TOOLS/MemoryReviewer.ts b/LifeOS/install/LIFEOS/TOOLS/MemoryReviewer.ts
+index d350d27..df6e3bc 100755
+--- a/LifeOS/install/LIFEOS/TOOLS/MemoryReviewer.ts
++++ b/LifeOS/install/LIFEOS/TOOLS/MemoryReviewer.ts
+@@ -236,7 +236,7 @@ There are four item types. Output EXACTLY this JSON shape:
+     {"type": "memory", "actor": "principal" | "assistant", "op": "set", "entries": ["PREFIX: durable fact ~provenance", "..."]},
+     {"type": "idea", "title": "short title", "content": "the idea body", "confidence": 0.0-1.0, "related": [{"slug": "...", "type": "..."}]},
+     {"type": "knowledge", "entity_type": "person" | "company" | "research", "name": "...", "content": "...", "confidence": 0.0-1.0, "related": [{"slug": "...", "type": "..."}]},
+-    {"type": "proposal", "target_kind": "identity" | "style" | "definition" | "canonical-content" | "resume" | "operational-rule" | "projects" | "contacts", "target_file": "absolute path", "edit": "the proposed addition", "confidence": 0.0-1.0, "rationale": "why this"}
++    {"type": "proposal", "target_kind": "identity" | "style" | "definition" | "canonical-content" | "resume" | "operational-rule" | "contacts", "target_file": "absolute path", "edit": "the proposed addition", "confidence": 0.0-1.0, "rationale": "why this"}
+   ]
+ }
+ 
+@@ -283,10 +283,6 @@ PROPOSAL SUBTYPES (target_kind → target_file → what to emit):
+   Emit when: ${PRINCIPAL_NAME} states an operating directive about HOW ${DA_NAME}/LifeOS should handle a class of work — tooling preference, deployment ritual, repo convention, environment-specific behavior.
+   Example: edit="**Ship-it directive** — when ${PRINCIPAL_NAME} says 'ship it' on a Cloudflare repo, deploy AND push to main in one atomic operation".
+ 
+-- projects → LIFEOS/USER/PROJECTS.md
+-  Emit when: ${PRINCIPAL_NAME} names a new project (repo, app, service, side build) that should be in the project routing table. Propose the row, not the body content.
+-  Example: edit="| **NewProject** | \`~/Projects/NewProject\` | newproject.com | bun run deploy | TS, CF Workers |".
+-
+ - contacts → LIFEOS/USER/CONTACTS.md
+   Emit when: ${PRINCIPAL_NAME} mentions a person 3+ times with enough context (role, relationship, why they matter) to add to the contacts file.
+ 
+@@ -296,7 +292,7 @@ DO SAVE:
+ - Names + roles + relationships of important people the conversation mentioned
+ - Ideas ${PRINCIPAL_NAME} articulated that have lasting value
+ - Knowledge about entities (people, companies, research) ${PRINCIPAL_NAME} referenced
+-- Definitions, style corrections, operational rules, new projects, new contacts (use the matching proposal subtype)
++- Definitions, style corrections, operational rules, new contacts (use the matching proposal subtype)
+ 
+ DO NOT SAVE:
+ - Session-specific transients ("we just did X")
 diff --git a/LifeOS/install/LIFEOS/TOOLS/MemoryTypes.ts b/LifeOS/install/LIFEOS/TOOLS/MemoryTypes.ts
+index 5f11ad8..84814dd 100755
 --- a/LifeOS/install/LIFEOS/TOOLS/MemoryTypes.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/MemoryTypes.ts
-@@ -53,9 +53,9 @@
+@@ -53,9 +53,9 @@ export const TIER_B_AUDIT_PATH = pathJoin(LIFEOS_DIR, "MEMORY", "OBSERVABILITY",
  //
  // Added P1 2026-05-25 to expand reviewer coverage beyond identity-only proposals.
  // Every Tier C file is reachable as a `proposal` item with the matching
@@ -38,7 +78,7 @@ diff --git a/LifeOS/install/LIFEOS/TOOLS/MemoryTypes.ts b/LifeOS/install/LIFEOS/
  
  export const PRINCIPAL_IDENTITY_PATH = pathJoin(LIFEOS_DIR, "USER", "PRINCIPAL", "PRINCIPAL_IDENTITY.md");
  export const DA_IDENTITY_PATH = pathJoin(LIFEOS_DIR, "USER", "DIGITAL_ASSISTANT", "DA_IDENTITY.md");
-@@ -64,7 +64,6 @@
+@@ -64,7 +64,6 @@ export const RESUME_PATH = pathJoin(LIFEOS_DIR, "USER", "PRINCIPAL", "RESUME.md"
  export const DEFINITIONS_PATH = pathJoin(LIFEOS_DIR, "USER", "DEFINITIONS.md");
  export const CANONICAL_CONTENT_PATH = pathJoin(LIFEOS_DIR, "USER", "CANONICAL_CONTENT.md");
  export const OPERATIONAL_RULES_PATH = pathJoin(LIFEOS_DIR, "USER", "CONFIG", "OPERATIONAL_RULES.md");
@@ -46,7 +86,7 @@ diff --git a/LifeOS/install/LIFEOS/TOOLS/MemoryTypes.ts b/LifeOS/install/LIFEOS/
  export const CONTACTS_PATH = pathJoin(LIFEOS_DIR, "USER", "CONTACTS.md");
  
  // ── Types ──
-@@ -178,12 +177,11 @@
+@@ -178,12 +177,11 @@ export type ProposalTargetKind =
    | "canonical-content"   // CANONICAL_CONTENT.md
    | "resume"              // RESUME.md
    | "operational-rule"    // CONFIG/OPERATIONAL_RULES.md
@@ -60,7 +100,7 @@ diff --git a/LifeOS/install/LIFEOS/TOOLS/MemoryTypes.ts b/LifeOS/install/LIFEOS/
  ] as const);
  
  /**
-@@ -198,7 +196,6 @@
+@@ -198,7 +196,6 @@ export const PROPOSAL_KIND_TO_FILES: Readonly<Record<ProposalTargetKind, readonl
    "canonical-content":  Object.freeze([CANONICAL_CONTENT_PATH]),
    resume:               Object.freeze([RESUME_PATH]),
    "operational-rule":   Object.freeze([OPERATIONAL_RULES_PATH]),
@@ -68,7 +108,18 @@ diff --git a/LifeOS/install/LIFEOS/TOOLS/MemoryTypes.ts b/LifeOS/install/LIFEOS/
    contacts:             Object.freeze([CONTACTS_PATH]),
  });
  
-@@ -442,7 +439,7 @@
+@@ -207,10 +204,6 @@ export const PROPOSAL_KIND_TO_FILES: Readonly<Record<ProposalTargetKind, readonl
+  * on EVERY turn. Proposals for these pass the ProposalScope gate in
+  * MemorySystem.add() — a skill- or project-scoped rule is diverted to the
+  * Upgrades store instead of being appended to always-on context.
+- *
+- * `projects` is deliberately ABSENT despite PROJECTS.md being @-imported: a
+- * PROJECTS.md row's whole job is to name a project, so scope-gating it would
+- * divert exactly the proposals that belong there.
+  */
+ export const ALWAYS_LOADED_KINDS: ReadonlySet<ProposalTargetKind> = Object.freeze(
+   new Set<ProposalTargetKind>(["identity", "operational-rule"]),
+@@ -498,7 +491,7 @@ function smokeTest(): number {
    check("knowledge with empty name rejected", kMissingFieldRejected);
  
    // 13. P1 2026-05-25: proposal subtype registry coverage
@@ -77,7 +128,7 @@ diff --git a/LifeOS/install/LIFEOS/TOOLS/MemoryTypes.ts b/LifeOS/install/LIFEOS/
    for (const k of ALL_PROPOSAL_KINDS) {
      check(`proposal kind '${k}' has at least one allowed target file`,
        Array.isArray(PROPOSAL_KIND_TO_FILES[k]) && PROPOSAL_KIND_TO_FILES[k].length > 0);
-@@ -459,7 +456,6 @@
+@@ -515,7 +508,6 @@ function smokeTest(): number {
    check("infer: WRITINGSTYLE → style",            inferProposalKind(WRITINGSTYLE_PATH) === "style");
    check("infer: DEFINITIONS → definition",        inferProposalKind(DEFINITIONS_PATH) === "definition");
    check("infer: OPERATIONAL_RULES → operational-rule", inferProposalKind(OPERATIONAL_RULES_PATH) === "operational-rule");
@@ -85,36 +136,8 @@ diff --git a/LifeOS/install/LIFEOS/TOOLS/MemoryTypes.ts b/LifeOS/install/LIFEOS/
    check("infer: CONTACTS → contacts",             inferProposalKind(CONTACTS_PATH) === "contacts");
    check("infer: unknown path defaults to identity (legacy compat)",
      inferProposalKind("/tmp/random.md") === "identity");
-diff --git a/LifeOS/install/LIFEOS/TOOLS/MemoryReviewer.ts b/LifeOS/install/LIFEOS/TOOLS/MemoryReviewer.ts
---- a/LifeOS/install/LIFEOS/TOOLS/MemoryReviewer.ts
-+++ b/LifeOS/install/LIFEOS/TOOLS/MemoryReviewer.ts
-@@ -199,7 +199,7 @@
-     {"type": "memory", "actor": "principal" | "assistant", "op": "set", "entries": ["PREFIX: durable fact ~provenance", "..."]},
-     {"type": "idea", "title": "short title", "content": "the idea body", "confidence": 0.0-1.0, "related": [{"slug": "...", "type": "..."}]},
-     {"type": "knowledge", "entity_type": "person" | "company" | "research", "name": "...", "content": "...", "confidence": 0.0-1.0, "related": [{"slug": "...", "type": "..."}]},
--    {"type": "proposal", "target_kind": "identity" | "style" | "definition" | "canonical-content" | "resume" | "operational-rule" | "projects" | "contacts", "target_file": "absolute path", "edit": "the proposed addition", "confidence": 0.0-1.0, "rationale": "why this"}
-+    {"type": "proposal", "target_kind": "identity" | "style" | "definition" | "canonical-content" | "resume" | "operational-rule" | "contacts", "target_file": "absolute path", "edit": "the proposed addition", "confidence": 0.0-1.0, "rationale": "why this"}
-   ]
- }
- 
-@@ -245,7 +245,6 @@
-   Emit when: {{PRINCIPAL_NAME}} states an operating directive about HOW {{DA_NAME}}/PAI should handle a class of work — tooling preference, deployment ritual, repo convention, environment-specific behavior.
-   Example: edit="**Ship-it directive** — when {{PRINCIPAL_NAME}} says 'ship it' on a Cloudflare repo, deploy AND push to main in one atomic operation".
- 
--- projects → LIFEOS/USER/PROJECTS.md
-   Emit when: {{PRINCIPAL_NAME}} names a new project (repo, app, service, side build) that should be in the project routing table. Propose the row, not the body content.
-   Example: edit="| **NewProject** | \`~/Projects/NewProject\` | newproject.com | bun run deploy | TS, CF Workers |".
- 
-@@ -258,7 +257,7 @@
- - Names + roles + relationships of important people the conversation mentioned
- - Ideas {{PRINCIPAL_NAME}} articulated that have lasting value
- - Knowledge about entities (people, companies, research) {{PRINCIPAL_NAME}} referenced
--- Definitions, style corrections, operational rules, new projects, new contacts (use the matching proposal subtype)
-+- Definitions, style corrections, operational rules, new contacts (use the matching proposal subtype)
- 
- DO NOT SAVE:
- - Session-specific transients ("we just did X")
 diff --git a/LifeOS/install/LIFEOS/TOOLS/MutationTier.ts b/LifeOS/install/LIFEOS/TOOLS/MutationTier.ts
+index b4fb2d9..088e246 100644
 --- a/LifeOS/install/LIFEOS/TOOLS/MutationTier.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/MutationTier.ts
 @@ -12,7 +12,7 @@
@@ -125,8 +148,8 @@ diff --git a/LifeOS/install/LIFEOS/TOOLS/MutationTier.ts b/LifeOS/install/LIFEOS
 + *            (CONTACTS.md, anything under MEMORY/KNOWLEDGE/)
   *
   *   Tier C — propose-only. Reviewer Phase 1 may queue an identity-doctrine
-  *            proposal to be surfaced via Telegram (loud) or applied silently
-@@ -50,7 +50,6 @@
+  *            proposal to be queued for principal review (loud) or applied silently
+@@ -52,7 +52,6 @@ const TIER_A_FILES: ReadonlySet<string> = new Set([
  
  /** Tier B: append-with-audit files (exact-match paths). */
  const TIER_B_FILES: ReadonlySet<string> = new Set([
@@ -134,22 +157,23 @@ diff --git a/LifeOS/install/LIFEOS/TOOLS/MutationTier.ts b/LifeOS/install/LIFEOS
    pathResolve(CLAUDE_ROOT, "LIFEOS/USER/CONTACTS.md"),
  ]);
  
-@@ -142,11 +141,6 @@
+@@ -143,11 +142,6 @@ function smokeTest(): number {
+     },
  
      // Tier B — exact-match
-     {
+-    {
 -      path: pathResolve(CLAUDE_ROOT, "LIFEOS/USER/PROJECTS.md"),
 -      expected: "B",
 -      why: "PROJECTS.md is append-with-audit",
 -    },
--    {
+     {
        path: pathResolve(CLAUDE_ROOT, "LIFEOS/USER/CONTACTS.md"),
        expected: "B",
-       why: "CONTACTS.md is append-with-audit",
 diff --git a/LifeOS/install/LIFEOS/TOOLS/ProposalGC.ts b/LifeOS/install/LIFEOS/TOOLS/ProposalGC.ts
+index 8dbc6c4..cb01d02 100755
 --- a/LifeOS/install/LIFEOS/TOOLS/ProposalGC.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/ProposalGC.ts
-@@ -43,7 +43,6 @@
+@@ -58,7 +58,6 @@ const SECTION = "## Memory-System Proposals";
  // Always-loaded files that carry an auto-appended proposals section.
  const TARGETS = [
    "LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md",
@@ -158,9 +182,10 @@ diff --git a/LifeOS/install/LIFEOS/TOOLS/ProposalGC.ts b/LifeOS/install/LIFEOS/T
    "LIFEOS/USER/DIGITAL_ASSISTANT/DA_IDENTITY.md",
  ];
 diff --git a/LifeOS/install/LIFEOS/TOOLS/TelosFreshness.ts b/LifeOS/install/LIFEOS/TOOLS/TelosFreshness.ts
+index 7148c0c..5e35b27 100755
 --- a/LifeOS/install/LIFEOS/TOOLS/TelosFreshness.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/TelosFreshness.ts
-@@ -46,7 +46,6 @@
+@@ -47,7 +47,6 @@ const LIFEOS_DIR = process.env.LIFEOS_DIR || join(HOME, ".claude", "LIFEOS");
  const TELOS_PATH = join(LIFEOS_DIR, "USER", "TELOS", "TELOS.md");
  const DA_IDENTITY_PATH = join(LIFEOS_DIR, "USER", "DIGITAL_ASSISTANT", "DA_IDENTITY.md");
  const PRINCIPAL_IDENTITY_PATH = join(LIFEOS_DIR, "USER", "PRINCIPAL", "PRINCIPAL_IDENTITY.md");
@@ -168,11 +193,19 @@ diff --git a/LifeOS/install/LIFEOS/TOOLS/TelosFreshness.ts b/LifeOS/install/LIFE
  const LIFEOS_SYSTEM_PROMPT_PATH = join(LIFEOS_DIR, "LIFEOS_SYSTEM_PROMPT.md");
  const PRINCIPAL_TELOS_PATH = join(LIFEOS_DIR, "USER", "TELOS", "PRINCIPAL_TELOS.md");
  const ARCHITECTURE_SUMMARY_PATH = join(LIFEOS_DIR, "DOCUMENTATION", "ARCHITECTURE_SUMMARY.md");
-@@ -165,7 +164,6 @@
+@@ -105,7 +104,6 @@ export const STALENESS_THRESHOLDS: Record<string, number> = {
+   // Constitutional context files
+   da_identity: 180,
+   principal_identity: 90,
+-  projects: 30,
+   lifeos_system_prompt: 90,
+   principal_telos: 30,
+   architecture_summary: 30,
+@@ -166,7 +164,6 @@ export const CONTEXT_FRESHNESS_REGISTRY: ContextFile[] = [
    { slug: "telos", path: TELOS_PATH, threshold_days: 30, is_auto_generated: false },
    { slug: "da_identity", path: DA_IDENTITY_PATH, threshold_days: 180, is_auto_generated: false },
    { slug: "principal_identity", path: PRINCIPAL_IDENTITY_PATH, threshold_days: 90, is_auto_generated: false },
 -  { slug: "projects", path: PROJECTS_PATH, threshold_days: 30, is_auto_generated: false },
-   { slug: "pai_system_prompt", path: LIFEOS_SYSTEM_PROMPT_PATH, threshold_days: 90, is_auto_generated: false },
+   { slug: "lifeos_system_prompt", path: LIFEOS_SYSTEM_PROMPT_PATH, threshold_days: 90, is_auto_generated: false },
    { slug: "principal_telos", path: PRINCIPAL_TELOS_PATH, threshold_days: 30, derived_from: TELOS_PATH, is_auto_generated: true },
    { slug: "architecture_summary", path: ARCHITECTURE_SUMMARY_PATH, threshold_days: 30, derived_from: LIFEOS_ARCHITECTURE_PATH, is_auto_generated: true },

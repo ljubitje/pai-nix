@@ -2,29 +2,32 @@ lifeos-nix patch f-derived-watch-wire — wire DerivedWatch into Pulse loadModul
 
 PROBLEM
   DerivedSync (regenerates PRINCIPAL_TELOS / LIFEOS_STATE / Data-Plane on USER edits) has no
-  Linux on-change trigger — upstream ships only launchd WatchPaths (macOS). Without it derived
-  artifacts refresh only on the daily cron / install_core, so a mid-day TELOS edit leaves the
-  @-imported PRINCIPAL_TELOS stale until 03:30.
+  Linux on-change trigger — upstream ships only launchd WatchPaths (macOS). 7.40.4 confirms:
+  no derived-watch module, no inotify wiring. Without it derived artifacts refresh only on
+  the daily cron / install_core, so a mid-day TELOS edit leaves the @-imported PRINCIPAL_TELOS
+  stale until the next run.
 
 FIX
   Ship a DerivedWatch module (LIFEOS/PULSE/modules/derived-watch.ts, added in installPhase 1b)
   and wire it into pulse.ts loadModules: inotify (fs.watch) on the USER source subtrees +
   debounce + single-flight, inside the Pulse process (no extra daemon, no polling). Default-on
-  (config.derived_watch.enabled !== false); the daily derived-sync cron stays as safety-net.
+  (config.derived_watch?.enabled !== false — undefined in 7.40.4's PulseConfig, so the gate is
+  default-on, which is the intent); the daily derived-sync cron stays as safety-net.
 
 SCOPE / CO-EXISTENCE
-  One hunk in pulse.ts loadModules (import + start, mirrors the existing module pattern). The
-  module file is added separately in installPhase. Disjoint from f-telos-source and f4-*.
+  One hunk in pulse.ts loadModules (import + start), inserted between the Assistant and
+  Performance module blocks. The module file is added separately in installPhase. Disjoint
+  from f-telos-source and f4-*. Re-generated against 7.40.4 loadModules (2026-08-27 migration).
 
 VERIFICATION
-  Standalone test (dev box): an edit-burst coalesces into ONE DerivedSync run (debounce), a
-  later edit re-fires, and output writes (PRINCIPAL_TELOS/LIFEOS_STATE) are ignored — no
-  self-trigger loop. Post-build: module present in payload; Pulse boots and logs
-  "[derived-watch] watching N USER dirs". Hunk via `diff -u`, never hand-counted.
+  Post-build: module present in payload; Pulse boots and logs "[derived-watch] watching N
+  USER dirs". Hunk via `git diff`, never hand-counted.
 
+diff --git a/LifeOS/install/LIFEOS/PULSE/pulse.ts b/LifeOS/install/LIFEOS/PULSE/pulse.ts
+index e1ca0e2..0d5ffa3 100755
 --- a/LifeOS/install/LIFEOS/PULSE/pulse.ts
 +++ b/LifeOS/install/LIFEOS/PULSE/pulse.ts
-@@ -150,6 +150,18 @@
+@@ -157,6 +157,18 @@ async function loadModules(config: PulseConfig) {
        log("warn", "Assistant module not available", { error: String(err) })
      }
    }
@@ -40,6 +43,6 @@ VERIFICATION
 +      log("warn", "DerivedWatch module not available", { error: String(err) })
 +    }
 +  }
-   if (config.performance?.enabled !== false) {
+   if (config.modules.performance) {
      try {
        performanceModule = await import("./Performance/module")

@@ -64,20 +64,14 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f4-b-elevenlabs-killswitch.patch   # Klemen B: ElevenLabs egress dead regardless of key
     ./patches/f4-c-pulse-disable-default-active.patch # RedTeam (a) + LOS-recon: 6 egress modules default-off (voice/telegram/morning-brief + local_intelligence/airgradient-poll/memory-consolidation)
     ./patches/0029-fix-pulse-graceful-shutdown-on-sigterm.patch # F3 re-cut: Pulse graceful SIGTERM (no 60s hang / mid-op SIGKILL)
-    ./patches/f-telos-source-unified-first.patch # f-telos: GenerateTelosSummary reads unified TELOS.md first (re-scaffolded sample per-file no longer shadows identity)
     ./patches/f-derived-watch-wire.patch    # f-derived-watch: wire DerivedWatch (inotify on-change regen) into pulse.ts loadModules
     ./patches/f-derived-watch-config.patch  # f-derived-watch: [derived_watch] enabled=true in base PULSE.toml
-    ./patches/f-docintegrity-rename.patch   # f-docintegrity: finish PAI→LIFEOS rename in DocCrossRefIntegrity + change-detection (dead doc-integrity checks)
     ./patches/f-launcher-cwd-default.patch  # f-launcher-cwd: `lifeos` stays in cwd by default (dev-first); --claude-dir/-c opts into ~/.claude
     ./patches/f-mergesettings-preserve-hooks.patch # f-mergesettings: MergeSettings re-attaches hooks from canonical hooks/hooks.json (else user overlay → SessionStart array dropped 5→0)
-    ./patches/f-mergesettings-prune-write-path.patch # f-mergesettings-prune-write: backport upstream v7.28.3 INERT_FILE_RULE_TOOLS — prune inert Write(path)/MultiEdit(path) perms (file permissions resolve against Edit(path) only). Clears the startup "not matched by file permission checks" warnings. Faithful subset of upstream → dissolves cleanly on the eventual version bump
-    ./patches/f-cron-breaker-halfopen.patch # f-cron-breaker: Pulse cron breaker self-heals via 30-min half-open probe (else a transient failure spike deadlocks the job → healthz degraded forever)
     ./patches/f-pulse-unit-nixos-skip.patch # f-pulse-unit: on NixOS skip installer unit-gen; nix module owns com.lifeos.pulse.service (correct PATH — else jobs ENOENT /bin/bash)
     ./patches/f-projects-dormant.patch # f-projects-dormant: do not force-load USER/PROJECTS.md (unbounded growth → ~53% startup ctx); opt-in via manual uncomment, on-demand via ContextSearch
-    ./patches/f-pulse-module-flags.patch # f-pulse-module-flags: merge PULSE.user.toml module sections + gate 10 always-load modules (else enable flags dead → modules load regardless)
     ./patches/f-projects-no-memory-writes.patch # f-projects-no-mem-writes: retire memory machinery around PROJECTS.md (reviewer proposals/tier-b/GC/freshness) — companion to dormant
     ./patches/f-mergesettings-hooks-overlay.patch # f-mergesettings-hooks-overlay: compose LIFEOS/USER/CONFIG/hooks.user.json over official hooks.json (our hooks leave the official file → syncs cleanly, no B∩C)
-    ./patches/f-pulse-preflight-tilde.patch # f-pulse-preflight-tilde: cron preflight expands ~/ before existsSync (else any ~-path job is falsely "script not present" → disabled every boot; upstream #1392 gate mishandles ~)
   ];
 
   nativeBuildInputs = [ makeWrapper ];
