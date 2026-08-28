@@ -14,12 +14,12 @@
   claude-code,
 }:
 let
-  version = "7.1.1.1"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .1 = tilde-fix + payload-sync tool + MANIFEST + F8 re-val
+  version = "7.40.4.0"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .0 = fresh upstream base (7.1.1.1 → 7.40.4 migration, patches re-triaged: 19→13, 6 DISSOLVE dropped)
   src = fetchFromGitHub {
     owner = "danielmiessler";
     repo = "LifeOS";
-    rev = "a4e8e7466c5e01af1fff865c6ad4258282fac63e"; # v7.1.1 release tag (M2 2026-08-07: re-pin from main-HEAD bc0a20a → exact tag for honest provenance)
-    hash = "sha256-XgjF4+G6bu78ZeYut4JVCgSh2HECdExKrFDDdMF/olU=";
+    rev = "be9e8ef889f00a29f4fd677dee4772fdf32e07ce"; # v7.40.4 release tag (2026-08-27 migration re-pin from v7.1.1 a4e8e74)
+    hash = "sha256-+tgdaJuKQx2uPIS0xWiQWu7hLNRcVV/rfACSr7OcaXU=";
   };
 
   # ── (b) reproducible-vendored deps ──────────────────────────────────────────
