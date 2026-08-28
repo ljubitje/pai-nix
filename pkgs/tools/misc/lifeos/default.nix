@@ -52,6 +52,11 @@ let
     pulse     = vendorTree { name = "pulse";     subdir = "LIFEOS/PULSE";               hash = "sha256-2zjzLOg6UPkQa86IMj+OPiB69IQOHZhuhtuZPanKU+o="; };
     obs       = vendorTree { name = "obs";       subdir = "LIFEOS/PULSE/Observability"; hash = "sha256-dzvmq20UIVDwc9Ui0nrPzckwIH9zT5pADgYaeTI/aRk="; };
     tokenxray = vendorTree { name = "tokenxray"; subdir = "LIFEOS/TOOLS/TokenXray";      hash = "sha256-VZFZ8RyMavdtBaUnkswSlv2tBcPEteCO5EOqb60HJlI="; lockFile = ./vendor-locks/tokenxray.bun.lock; };
+    # Skill-tool trees whose .ts run IN-PLACE (direct package imports) — vendored so they work under Nix.
+    # (7.40.4 migration: of 8 candidate skill trees, only these 2 import deps in-place; Telos Dashboard/Report +
+    #  Remotion are runtime-instantiated templates [cp + `bun install`], LifeOS/install is the installer path — none need baking.)
+    evals     = vendorTree { name = "evals";     subdir = "skills/Evals";                     hash = "sha256-bssfF6GwCBLgE9EiYAdS5EEccnc+MU00ONHheRKqG1E="; lockFile = ./vendor-locks/evals.bun.lock; };
+    prompting = vendorTree { name = "prompting"; subdir = "skills/Prompting/Templates/Tools";  hash = "sha256-q7zyO94vL/Rw7KfF06YDbTb1E7ed0DFFa3tVeqNTnXU="; };
   };
 in
 stdenvNoCC.mkDerivation (finalAttrs: {
@@ -113,6 +118,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     cp -r ${deps.obs}       $out/share/lifeos/LifeOS/install/LIFEOS/PULSE/Observability/node_modules
     cp -r ${deps.tools}     $out/share/lifeos/LifeOS/install/LIFEOS/TOOLS/node_modules
     cp -r ${deps.tokenxray} $out/share/lifeos/LifeOS/install/LIFEOS/TOOLS/TokenXray/node_modules
+    # Skill-tool trees that run in-place (7.40.4 vendor pass — Evals + Prompting tools import deps directly).
+    cp -r ${deps.evals}     $out/share/lifeos/LifeOS/install/skills/Evals/node_modules
+    cp -r ${deps.prompting} $out/share/lifeos/LifeOS/install/skills/Prompting/Templates/Tools/node_modules
     chmod -R u+w $out/share/lifeos
 
     # 2b) Build the Observability dashboard → static export (out/), fully offline
