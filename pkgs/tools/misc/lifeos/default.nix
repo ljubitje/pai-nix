@@ -14,7 +14,7 @@
   claude-code,
 }:
 let
-  version = "7.40.4.1"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .1 = claude-code 2.1.251 pinned as SoT (vendored derivation + Pulse unit path + update.sh fix); .0 = fresh upstream base (7.1.1.1 → 7.40.4 migration, patches re-triaged: 19→13, 6 DISSOLVE dropped)
+  version = "7.40.4.2"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .2 = f4-d Atlas no-graph-egress (Inference hard-kill in PULSE/modules/atlas.ts + atlas/atlas_insights off until inference is local); .1 = claude-code 2.1.251 pinned as SoT (vendored derivation + Pulse unit path + update.sh fix); .0 = fresh upstream base (7.1.1.1 → 7.40.4 migration, patches re-triaged: 19→13, 6 DISSOLVE dropped)
   src = fetchFromGitHub {
     owner = "danielmiessler";
     repo = "LifeOS";
