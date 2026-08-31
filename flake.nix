@@ -44,7 +44,9 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; config.allowUnfree = true; };
-        claude-code = pkgs.claude-code;
+        # SoT: lifeos-nix owns the claude-code version pin (vendored derivation +
+        # manifest.json), not raw nixpkgs. Bump: ./pkgs/tools/misc/claude-code/update.sh <version>.
+        claude-code = pkgs.callPackage ./pkgs/tools/misc/claude-code { };
         lifeos = pkgs.callPackage ./pkgs/tools/misc/lifeos {
           inherit claude-code;
         };
