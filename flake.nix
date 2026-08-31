@@ -25,7 +25,9 @@
           # (no `after = network.target` — it is a system target, absent from the
           # per-user manager, so the ordering dep would be silently ignored.)
           wantedBy = [ "default.target" ];
-          path = [ pkgs.bash pkgs.bun pkgs.git pkgs.coreutils pkgs.curl ];
+          # claude-code included so Pulse cron jobs' Bun.which("claude") resolves
+          # under the unit's (replaced, not appended) PATH — ISC-45 for the Pulse consumer.
+          path = [ pkgs.bash pkgs.bun pkgs.git pkgs.coreutils pkgs.curl self.packages.${pkgs.stdenv.hostPlatform.system}.claude-code ];
           serviceConfig = {
             Type = "simple";
             ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p %h/.claude/LIFEOS/PULSE/logs";
