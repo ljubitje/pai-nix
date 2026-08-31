@@ -1,6 +1,6 @@
-#!/usr/bin/env nix
-#!nix shell --ignore-environment .#cacert .#coreutils .#curl .#bash --command bash
-
+#!/usr/bin/env bash
+# Bump the claude-code pin: refetch the official manifest for <version> (or latest).
+# Usage: ./update.sh [version]   then rebuild. Uses ambient curl (NixOS system certs).
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
