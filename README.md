@@ -4,7 +4,7 @@ Nix packaging of [LifeOS](https://github.com/danielmiessler/LifeOS) — Daniel M
 
 Upstream ships as an AI-native, skill-only distribution installed by a chain of `bun` TypeScript tools driven by `INSTALL.md`, assuming a writable `~/.claude` and network access at install time. lifeos-nix wraps that into a proper derivation: the skill+runtime payload is store-copied, every npm dependency tree is vendored as a fixed-output derivation (reproducible, offline), a small patch set neutralizes default background egress, and a `lifeos` launcher on `PATH` drives the upstream installer in user space — no `/etc`, `~/.zshrc`, or `~/.bashrc` writes.
 
-> **Rebased across two upstream eras.** Originally PAI v5.0.0; upstream renamed PAI → LifeOS and shipped v7.1.1 ("The Bitter Pill" reorg: skill-only distribution, `PAI/` → `LIFEOS/`, config `yaml` → `toml`), then moved on to **v7.40.4** (a 40-version jump). Each rebase re-triaged the patch set against the fresh source — most divergences turned out to be clean upstream changes that dissolved on contact (the 7.40.4 pass alone dropped 6 of 19). The current set is **thirteen load-bearing patches**: privacy/runtime kills (f2, f4-*, 0029), the Linux DerivedWatch service, Pulse runtime fixes (systemd-unit ownership, NixOS unit-gen skip), settings/hooks override composition, `PROJECTS.md` dormancy, and a dev-first launcher default. Full list: `pkgs/tools/misc/lifeos/patches/` and `ISA.md` (local system of record).
+> **Rebased across upstream releases.** LifeOS shipped v7.1.1 ("The Bitter Pill" reorg: skill-only distribution, config `yaml` → `toml`), then moved on to **v7.40.4** (a 40-version jump). Each rebase re-triaged the patch set against the fresh source — most divergences turned out to be clean upstream changes that dissolved on contact (the 7.40.4 pass alone dropped 6 of 19). The current set is **thirteen load-bearing patches**: privacy/runtime kills (f2, f4-*, 0029), the Linux DerivedWatch service, Pulse runtime fixes (systemd-unit ownership, NixOS unit-gen skip), settings/hooks override composition, `PROJECTS.md` dormancy, and a dev-first launcher default. Full list: `pkgs/tools/misc/lifeos/patches/` and `ISA.md` (local system of record).
 
 ---
 
@@ -27,7 +27,7 @@ Upstream ships as an AI-native, skill-only distribution installed by a chain of 
 }
 ```
 
-`nixosModules.lifeos` adds the package to `environment.systemPackages`. Then run the `lifeos` launcher once — on a fresh `~/.claude` it installs the LifeOS payload; on an existing pre-7.x PAI/LifeOS tree it **refuses** (freeze-guard) rather than clobber it.
+`nixosModules.lifeos` adds the package to `environment.systemPackages`. Then run the `lifeos` launcher once — on a fresh `~/.claude` it installs the LifeOS payload; on an existing pre-7.x install it **refuses** (freeze-guard) rather than clobber it.
 
 ### `nix profile` (any flake-aware Nix)
 
