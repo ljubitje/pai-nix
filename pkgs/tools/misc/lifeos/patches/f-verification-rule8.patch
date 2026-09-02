@@ -1,0 +1,101 @@
+lifeos-nix patch f-verification-rule8 — add rule 8 (falsifier fidelity) to the verification doctrine
+
+ORDER
+  Applies AFTER f-incidents-retire. Both touch algorithm-tab.ts; this one edits the
+  Verification role string, the other removes the Incidents entry a few lines below, so
+  the hunks are generated against the already-patched tree and must stay in that order
+  in default.nix.
+
+PROBLEM
+  The seven verification rules all ask the same shape of question: is this the right
+  probe, on the right path, at the right time? None asks whether the probe can go red at
+  all. A grep of the doctrine for mutation / tautology / by-construction returns nothing.
+
+  Found live (stroskar revenue layer, 2026-09-01, eight review rounds): three tests could
+  not fail on any plausible single change to production code. One looped over the same
+  constant the code builds its SQL clause from, and stayed green when that constant was
+  mutated into literally the bug it exists to prevent. One asserted a fact about a config
+  file it never read. Four negative assertions passed against an EMPTY parse result, i.e.
+  against total failure of the reader, because all() over nothing is True.
+
+  The mirror error appeared in the same session and is why the rule names its method: a
+  reviewer argued from reading that a central balance test was a tautology, the argument
+  was accepted without a mutation, written into a decision record and a commit message,
+  and reported twice — then falsified by a single mutation that broke the test in both
+  parametrisations. A confident structural argument about a test sounds like it has
+  already been verified, which is exactly why it skips verification. Every error of this
+  class in that session, in both directions, came from reading.
+
+  Contributing factor: the Hardening skill already performs mutation testing. Nothing in
+  doctrine said WHEN reaching for it becomes obligatory, so it was never reached for.
+
+FIX (3 files)
+  Verification.md   — rule 8, section heading six->eight... seven->eight, version 2.2.1
+                      -> 2.3.0. Rules 1-7 untouched.
+  SYSTEM_PROMPT.md  — the resident pointer: seven -> eight, falsifier fidelity named in
+                      the by-name list, and the load-trigger list gains "when judging
+                      whether a green test is evidence".
+  algorithm-tab.ts  — the Pulse doc-map role string for Verification.md said "six" and
+                      omitted cache fidelity (stale upstream by one before this change);
+                      now says eight and lists all of them. The trailing "Cites incidents
+                      by INC-ID." is dropped with the retired surface.
+
+  No hook, tool or test reads the rule text, so nothing executable changes. The rule is
+  doctrine the model follows, not a gate — deliberately: a gate that tried to detect an
+  unfailable test would have to run the mutation itself, which is the Hardening skill's
+  job and is invoked per-run, not per-edit.
+
+diff -ruN a/LifeOS/install/LIFEOS/LIFEOS_SYSTEM_PROMPT.md b/LifeOS/install/LIFEOS/LIFEOS_SYSTEM_PROMPT.md
+--- a/LifeOS/install/LIFEOS/LIFEOS_SYSTEM_PROMPT.md	1970-01-01 01:00:01.000000000 +0100
++++ b/LifeOS/install/LIFEOS/LIFEOS_SYSTEM_PROMPT.md	2026-09-02 10:32:09.486895127 +0200
+@@ -95,7 +95,7 @@
+ 
+ Web output is browser-verified through the **Interceptor skill** BEFORE the principal sees it — the ONLY sanctioned browser automation (real Chrome, real sessions; Playwright BANNED). A 200 from curl proves nothing about a page.
+ 
+-**The seven incident-derived rules live in ONE place: `LIFEOS/RULES/Verification.md`** — by name: modality fidelity · unavailable-verifier-means-DEFER · appearance ≠ existence · reproduce before fixing · temporal fidelity · restore-parity on replace/delete · cache fidelity (response, deploy and data paths — a mock cannot reproduce a cache; verification converges or it does not count). Load that file whenever verifying web/UI output, claiming how something looks, deleting or replacing live infra, or when the verifier is wedged. Enforced by `hooks/VerificationGate.hook.ts` + `AlgorithmNudge.hook.ts`; bound into runs by Algorithm claims 8 and 16. Never restate those rules elsewhere — pointer only.
++**The eight incident-derived rules live in ONE place: `LIFEOS/RULES/Verification.md`** — by name: modality fidelity · unavailable-verifier-means-DEFER · appearance ≠ existence · reproduce before fixing · temporal fidelity · restore-parity on replace/delete · cache fidelity (response, deploy and data paths — a mock cannot reproduce a cache; verification converges or it does not count) · falsifier fidelity (a probe whose expected side derives from the code under test cannot fail; only a mutation, never reading, proves it can). Load that file whenever verifying web/UI output, claiming how something looks, deleting or replacing live infra, when the verifier is wedged, or when judging whether a green test is evidence. Enforced by `hooks/VerificationGate.hook.ts` + `AlgorithmNudge.hook.ts`; bound into runs by Algorithm claims 8 and 16. Never restate those rules elsewhere — pointer only.
+ 
+ **Confidence requires source.** Every authoritative claim must be grounded in a source verified this session (Read, code inspect, tool run, URL fetch) — inference and recall don't count. **A second model agreeing is NOT a source.** Verify first, flag uncertainty in-sentence, or drop the claim. Never present an open question as solved — map known vs unknown instead. Applies to every domain.
+ 
+diff -ruN a/LifeOS/install/LIFEOS/PULSE/modules/algorithm-tab.ts b/LifeOS/install/LIFEOS/PULSE/modules/algorithm-tab.ts
+--- a/LifeOS/install/LIFEOS/PULSE/modules/algorithm-tab.ts	2026-09-02 10:32:09.485335373 +0200
++++ b/LifeOS/install/LIFEOS/PULSE/modules/algorithm-tab.ts	2026-09-02 10:32:09.487066878 +0200
+@@ -193,7 +193,7 @@
+   },
+   {
+     id: "verification-expanded", name: "Verification Doctrine", rel: "LIFEOS/RULES/Verification.md",
+-    role: "The ONE home of the six incident-derived verification rules (modality fidelity, defer-never-substitute, appearance ≠ existence, reproduce-before-fixing, temporal fidelity, restore-parity). Cites incidents by INC-ID.",
++    role: "The ONE home of the eight incident-derived verification rules (modality fidelity, defer-never-substitute, appearance ≠ existence, reproduce-before-fixing, temporal fidelity, restore-parity, cache fidelity, falsifier fidelity).",
+     loaded: "On demand (web/UI verification)", stage: "ondemand", editable: true, kind: "markdown",
+   },
+   {
+diff -ruN a/LifeOS/install/LIFEOS/RULES/Verification.md b/LifeOS/install/LIFEOS/RULES/Verification.md
+--- a/LifeOS/install/LIFEOS/RULES/Verification.md	2026-09-02 10:32:09.485539850 +0200
++++ b/LifeOS/install/LIFEOS/RULES/Verification.md	2026-09-02 10:32:09.486679965 +0200
+@@ -1,14 +1,14 @@
+ ---
+-version: 2.2.1
++version: 2.3.0
+ ---
+ 
+ # Verification Doctrine — the single statement
+ 
+-> **This file is the ONE home of the seven incident-derived verification rules.** The system prompt keeps the constitutional core resident (self-check, the Interceptor mandate, the "should work" ban, confidence-requires-source) and points here; the Algorithm's claims 8 and 16 bind these rules into runs; nothing else restates them. Load when verifying web/UI output, when a claim is about appearance, when deleting or replacing live infra, when verifying anything that must expire or propagate, or when the verifier is unavailable. Enforced by `hooks/VerificationGate.hook.ts` + `hooks/AlgorithmNudge.hook.ts`.
++> **This file is the ONE home of the eight incident-derived verification rules.** The system prompt keeps the constitutional core resident (self-check, the Interceptor mandate, the "should work" ban, confidence-requires-source) and points here; the Algorithm's claims 8 and 16 bind these rules into runs; nothing else restates them. Load when verifying web/UI output, when a claim is about appearance, when deleting or replacing live infra, when verifying anything that must expire or propagate, or when the verifier is unavailable. Enforced by `hooks/VerificationGate.hook.ts` + `hooks/AlgorithmNudge.hook.ts`.
+ 
+ Browser-verify all web output through the **Interceptor skill** BEFORE showing the principal. Interceptor is the ONLY sanctioned browser automation in LifeOS — real Chrome, no CDP detection, real login sessions, accurate rendering. agent-browser is deprecated for verification and misses rendering issues real Chrome catches; Playwright is BANNED — if tempted, fix Interceptor instead. "curl returns 200" is not verification. A screenshot from agent-browser is not verification. Every time you create, fix, deploy, or claim anything works on the web — verify with Interceptor. No exceptions.
+ 
+-## The seven rules
++## The eight rules
+ 
+ 1. **Modality fidelity** — the probe must exercise the SAME path the user does: a Web/UI claim closes only on a real browser navigation to the actual URL, through Interceptor. A `curl`, a DOM read of a *different* page, or a check of a sibling path is a different request and proves nothing about what the browser renders at the path in question — curl and a real browser can literally receive different pages. "I curled it and got the right thing" is not "the user's browser gets the right thing."
+ 
+@@ -30,6 +30,8 @@
+ 
+ 6. **Restore-parity on replace/delete — ownership enumeration before AND after** — changing or deleting anything serving live traffic or producing a flowing metric requires: the flow's baseline captured BEFORE (rate over a stated window, function inventory); what the resource OWNS enumerated via the provider's authority API before the op (Workers custom domains: `GET /accounts/{id}/workers/domains`; DNS: `GET /zones/{id}/dns_records`) — a dependent record "already existing" is NOT evidence it survives the delete; managed records look identical to independent ones in a zone listing and die with their owner; the authority re-listed AFTER the op — a runtime probe through a warm cache is not the authority; and post-change evidence the flow continues at baseline within stated tolerance. One synthetic event landing is an example claim and never closes parity — "flow continues at baseline rate" is the universal claim that catches the outage. A safety mitigation written into Decisions is promoted to a claim with a falsifier BEFORE the op executes — prose mitigations have no teeth. Metered pipelines hold `[DEFERRED-VERIFY]` until a delayed delta check vs baseline (T+≥1h, or T+TTL for cache-mediated surfaces, whichever is longer).
+ 
++8. **Falsifier fidelity — the probe must be able to FAIL** — rules 1-7 ask whether a probe touches the right path at the right time; this one asks whether it can go red at all. A test whose expected side is derived from the same constant, dictionary, or function as its actual side asserts only that the code agrees with itself, and a negative assertion (`x not in y`, `all(...)`) passes against an EMPTY result, because `all()` over nothing is `True` — i.e. it passes against total failure of the thing under test. The question is behavioural: **is there a plausible single change to production code that turns this probe red? Only a mutation answers that — never reading.** Run mutations on an isolated copy (`git archive HEAD` into a scratch dir), one per run with bytecode cleared, never in the live tree; a mutation over a tree being edited reports false alarms. Three arbiters are legitimate for the expected side — a literal hand-written in the test, a fixture, or the live system. A fourth answer, "the module itself", means the probe is a **change detector**: worth keeping deliberately, since it forces a constant edit to be intentional, but never evidence of correctness. Two corollaries: pair every negative assertion with a positive anchor in the same test, and remember that *"holds by construction" is a property of the test while "covers" is a property of the fixture* — a probe with real teeth can still leave half a mapping unguarded because its fixture never reaches there. `Skill("Hardening")` is the standing capability for this; this rule is what makes reaching for it obligatory rather than optional.
++
+ ## Evidence coverage — the probe set spans the claim
+ 
+ When a claim quantifies over a container (a site, a corpus, a fleet, a data set), the container passing is not evidence for its members. The probe set touches every member TYPE the user actually consumes, one rendered/executed instance each, and a deterministic gate sweeps the rest where one exists. Shell pages and HTTP 200s verify nothing on an SPA.

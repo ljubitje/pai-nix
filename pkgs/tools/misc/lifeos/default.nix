@@ -14,7 +14,7 @@
   claude-code,
 }:
 let
-  version = "7.40.4.4"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .4 = f-incidents-retire (INCIDENTS narrative surface retired — declared, never populated, and redundant with FAILURES/ + RecurrenceLedger; Klemen 2026-09-01); .3 = f4-e AtlasEventCapture hook unregistered (Atlas off in one piece); .2 = f4-d Atlas no-graph-egress (Inference hard-kill in PULSE/modules/atlas.ts + atlas/atlas_insights off until inference is local); .1 = claude-code 2.1.251 pinned as SoT (vendored derivation + Pulse unit path + update.sh fix); .0 = fresh upstream base (7.1.1.1 → 7.40.4 migration, patches re-triaged: 19→13, 6 DISSOLVE dropped)
+  version = "7.40.4.5"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .5 = f-verification-rule8 (falsifier fidelity = rule 8; a probe whose expected side derives from the code under test cannot fail — only mutation proves it can); .4 = f-incidents-retire (INCIDENTS narrative surface retired — declared, never populated, and redundant with FAILURES/ + RecurrenceLedger; Klemen 2026-09-01); .3 = f4-e AtlasEventCapture hook unregistered (Atlas off in one piece); .2 = f4-d Atlas no-graph-egress (Inference hard-kill in PULSE/modules/atlas.ts + atlas/atlas_insights off until inference is local); .1 = claude-code 2.1.251 pinned as SoT (vendored derivation + Pulse unit path + update.sh fix); .0 = fresh upstream base (7.1.1.1 → 7.40.4 migration, patches re-triaged: 19→13, 6 DISSOLVE dropped)
   src = fetchFromGitHub {
     owner = "danielmiessler";
     repo = "LifeOS";
@@ -77,6 +77,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f-mergesettings-preserve-hooks.patch # f-mergesettings: MergeSettings re-attaches hooks from canonical hooks/hooks.json (else user overlay → SessionStart array dropped 5→0)
     ./patches/f-pulse-unit-nixos-skip.patch # f-pulse-unit: on NixOS skip installer unit-gen; nix module owns com.lifeos.pulse.service (correct PATH — else jobs ENOENT /bin/bash)
     ./patches/f-incidents-retire.patch  # f-incidents-retire: retire the INCIDENTS narrative surface (4 write-paths severed)
+    ./patches/f-verification-rule8.patch  # f-verification-rule8: rule 8 falsifier fidelity (MUST stay after f-incidents-retire — both touch algorithm-tab.ts)
     ./patches/f-projects-dormant.patch # f-projects-dormant: do not force-load USER/PROJECTS.md (unbounded growth → ~53% startup ctx); opt-in via manual uncomment, on-demand via ContextSearch
     ./patches/f-projects-no-memory-writes.patch # f-projects-no-mem-writes: retire memory machinery around PROJECTS.md (reviewer proposals/tier-b/GC/freshness) — companion to dormant
     ./patches/f-mergesettings-hooks-overlay.patch # f-mergesettings-hooks-overlay: compose LIFEOS/USER/CONFIG/hooks.user.json over official hooks.json (our hooks leave the official file → syncs cleanly, no B∩C)
