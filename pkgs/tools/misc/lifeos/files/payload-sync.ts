@@ -17,7 +17,7 @@
  * lifeos-nix-specifičen (vanilla nima store→live razcepa); shipan v LIFEOS/TOOLS/ prek installPhase.
  *
  * Uporaba:
- *   bun payload-sync.ts --new <B-install-dir> [--old <A-install-dir>] [--live <~/.claude>] [--roots LIFEOS,hooks] [--apply]
+ *   bun payload-sync.ts --new <B-install-dir> [--old <A-install-dir>] [--live <~/.claude>] [--roots <a,b,c>|privzeto iz manifesta] [--apply]
  */
 import { createHash } from "node:crypto"
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, copyFileSync, rmSync, chmodSync, statSync } from "node:fs"
@@ -31,13 +31,22 @@ function arg(flag: string, def?: string): string | undefined {
 const NEW = arg("--new")!
 const OLD = arg("--old") // optional fallback / bootstrap accelerator
 const LIVE = arg("--live", join(process.env.HOME ?? "", ".claude"))!
-const ROOTS = (arg("--roots", "LIFEOS,hooks") as string).split(",")
+const ROOTS_ARG = arg("--roots")   // privzetek se izpelje iz manifesta spodaj (glej DEFAULT_ROOTS)
 const MANIFEST = arg("--manifest", join(NEW, "MANIFEST.sha256"))!   // official fingerprints for B (this release)
 const KNOWN = arg("--known", join(LIVE, "LIFEOS", "MEMORY", "STATE", "known-official.sha256"))! // accumulated across releases
 
 if (!NEW || !existsSync(NEW)) { console.error("payload-sync: --new (B payload install dir) manjka/ne obstaja"); process.exit(2) }
 
 const SKIP = /(^|\/)(USER|MEMORY|node_modules|\.git)(\/|$)|\/Observability\/out\/|\/\.next\//
+
+// Uradni root fajli, ki jih ta instalacija NAMENOMA ne drži. Ločeno od SKIP: SKIP pomeni
+// "ni del payloada", to pa "je uraden, a smo se odločili brez njega". Zato se tudi POROČAJO,
+// ne le preskočijo — odsotnost, o kateri nič ne poroča, je natanko past, ki je 2026-09-01
+// pustila settings.system.json enajst deny pravil zadaj, neopazno čez tri izdaje.
+//   install.sh                 — upstreamov namestitveni skript; namestitev opravi nix
+//   CLAUDE.template.md         — predloga za CLAUDE.md; naš je pisan na roko
+//   settings.enhancements.json — samo spinnerVerbs/spinnerTipsOverride; oba že v settings.user.json
+const DELIBERATELY_ABSENT = new Set(["install.sh", "CLAUDE.template.md", "settings.enhancements.json"])
 
 const sha = (p: string): string | null => {
   try { return createHash("sha256").update(readFileSync(p)).digest("hex") } catch { return null }
@@ -63,6 +72,16 @@ for (const [h, p] of parseHashList(KNOWN)) addKnown(h, p)          // accumulate
 const manifestFound = existsSync(MANIFEST)
 for (const [h, p] of parseHashList(MANIFEST)) addKnown(h, p)       // this release (B) → official henceforth
 
+// ── Obseg sprehoda se izpelje iz MANIFESTA, ne zabetonira ────────────────────
+// Prej je bil privzetek "LIFEOS,hooks", kar je tiho izpuščalo skills/, agents/,
+// commands/ IN vseh pet uradnih root fajlov. Klic z ozkim privzetkom je izgledal
+// popolno uspešen (`0 REVIEW`), ker o neobiskanem ni poročal nihče. Manifest je
+// avtoriteta o tem, kaj je uraden payload, zato naj on določa obseg.
+const manifestPaths = parseHashList(MANIFEST).map(([, p]) => p)
+const DEFAULT_ROOTS = [...new Set(manifestPaths.filter((p) => p.includes("/")).map((p) => p.split("/")[0]))]
+const ROOTS = ROOTS_ARG ? ROOTS_ARG.split(",") : DEFAULT_ROOTS
+const MANIFEST_ROOT_FILES = manifestPaths.filter((p) => !p.includes("/"))   // fajli na vrhu: zunaj vsakega mapnega korena
+
 function* walk(dir: string): Generator<string> {
   if (!existsSync(dir)) return
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -77,21 +96,28 @@ type Bucket = "CURRENT" | "TAKE_B" | "ADD" | "REVIEW" | "DELETE"
 const buckets: Record<Bucket, string[]> = { CURRENT: [], TAKE_B: [], ADD: [], REVIEW: [], DELETE: [] }
 
 // --- za vsak fajl v NOVEM payloadu (B): klasificiraj živ ---
-for (const root of ROOTS) {
-  for (const nf of walk(join(NEW, root))) {
-    const rel = relative(NEW, nf)
-    if (SKIP.test("/" + rel)) continue
-    const lf = join(LIVE, rel)
-    if (!existsSync(lf)) { buckets.ADD.push(rel); continue }
-    const b = sha(nf), l = sha(lf)
-    if (l === b) { buckets.CURRENT.push(rel); continue }
-    // A-detection: live is a known official hash for this path (any release) → safe overwrite with B.
-    const officialByManifest = l != null && (known.get(rel)?.has(l) ?? false)
-    const officialByOld = OLD ? l === sha(join(OLD, rel)) : false
-    if (officialByManifest || officialByOld) buckets.TAKE_B.push(rel)   // A∩B: known-official older version
-    else buckets.REVIEW.push(rel)   // off the list ⇒ ours / diverged: official has an update AND live changed → MERGE-candidate (B3 skill), never blind overwrite
-  }
+const absent: string[] = []   // uradno, a namenoma brez — poroča se, ne skrije
+
+function classify(rel: string): void {
+  if (SKIP.test("/" + rel)) return
+  if (DELIBERATELY_ABSENT.has(rel)) { absent.push(rel); return }
+  const nf = join(NEW, rel)
+  if (!existsSync(nf)) return
+  const lf = join(LIVE, rel)
+  if (!existsSync(lf)) { buckets.ADD.push(rel); return }
+  const b = sha(nf), l = sha(lf)
+  if (l === b) { buckets.CURRENT.push(rel); return }
+  // A-detection: live is a known official hash for this path (any release) → safe overwrite with B.
+  const officialByManifest = l != null && (known.get(rel)?.has(l) ?? false)
+  const officialByOld = OLD ? l === sha(join(OLD, rel)) : false
+  if (officialByManifest || officialByOld) buckets.TAKE_B.push(rel)   // A∩B: known-official older version
+  else buckets.REVIEW.push(rel)   // off the list ⇒ ours / diverged: official has an update AND live changed → MERGE-candidate (B3 skill), never blind overwrite
 }
+
+// vir 1: sprehod po mapnih korenih
+for (const root of ROOTS) for (const nf of walk(join(NEW, root))) classify(relative(NEW, nf))
+// vir 2: uradni fajli na vrhu payloada — noben mapni koren jih ne zajame
+for (const rel of MANIFEST_ROOT_FILES) classify(rel)
 
 // --- A brez B: fajl v STAREM payloadu, ki ga NOV nima (uradni izbris) ---
 if (OLD) for (const root of ROOTS) {
@@ -126,6 +152,10 @@ line("TAKE_B", "živ == znan-uradni hash (A∩B) → determinističen prepis z B
 line("ADD", "nov fajl → copy-missing")
 line("REVIEW", "off-list ⇒ najin/diverged → MERGE-kandidat (B3 skill), nikoli slep prepis")
 line("DELETE", "A brez B (uradni izbris) → briši (z backupom)")
+console.log(`\n  pokritost: ${buckets.CURRENT.length + buckets.TAKE_B.length + buckets.ADD.length + buckets.REVIEW.length + absent.length} / ${manifestPaths.length} uradnih poti iz manifesta`)
+if (absent.length) console.log(`  namenoma brez (${absent.length}): ${absent.join(", ")}`)
+console.log(`\n── TAKE_B (živ je starejša uradna verzija → varen prepis z B): ──`)
+for (const r of buckets.TAKE_B) console.log("   " + r)
 console.log(`\n── REVIEW (merge-kandidati — uradni ima update IN živ je spremenjen; skill/human zlije): ──`)
 for (const r of buckets.REVIEW) console.log("   " + r)
 if (buckets.DELETE.length) { console.log(`\n── DELETE kandidati: ──`); for (const r of buckets.DELETE) console.log("   " + r) }
