@@ -1,0 +1,93 @@
+lifeos-nix patch f-incidents-retire — retire the INCIDENTS narrative surface
+
+PROBLEM
+  Doctrine routes a whole class of learning into hand-written failure narratives at
+  MEMORY/LEARNING/INCIDENTS/INC-YYYYMMDD-<slug>.md, with rules citing them by ID. In
+  practice the surface was declared and never populated: the directory did not exist on
+  this install after four months of daily use, while its siblings REFLECTIONS/ and
+  FAILURES/ filled up on their own.
+
+  It is also redundant with machinery that already works. FAILURES/ holds 654 machine-
+  captured sentiment.json records, and RecurrenceLedger.ts derives failure classes from
+  the observability streams the gates already write — no new write paths, no human in the
+  loop. The one argument for hand-written narratives (later pattern-mining) is therefore
+  already covered for free.
+
+  And the measured trend says the alternative works: low-rating captures fell 309 -> 187
+  -> 117 -> 41 across 2026-05..08. Fixing in the moment, then compressing the rule, is
+  what produced that curve; no narrative was written for any of it.
+
+  Principal's call (2026-09-01): "ni mi zares všeč to da bi documentala failures ... no
+  need for a book of shame or whatev ... mnogo bolj efficient je sproti fixat stvari."
+
+FIX (4 files) — remove every route that sends writing INTO the surface
+  SelfHealing.md        — drop the routing-table row for the INC narrative.
+  Verification.md       — drop the header sentence pointing at INCIDENTS/ as the home of
+                          incident narratives (the rules themselves stay incident-derived;
+                          only the narrative-filing instruction goes).
+  v8.20.2.md            — drop the `incident` route from the Learning Router in claim 12;
+                          the remaining routes (knowledge/rule/gotcha/state/business) are
+                          untouched, and `default SKIP` already covers the dropped case.
+  algorithm-tab.ts      — drop the Pulse "Incidents" doc-map entry (it pointed at a
+                          README that does not exist).
+
+  NOT touched, deliberately: Containment.md keeps the INC-YYYYMMDD naming convention in
+  its release-gate description (a structural pattern, harmless if unused), and
+  ProseInCode.ts keeps allowing an INC-ID in a code comment. Neither is a write path, and
+  both would need re-adding if the surface is ever revived. No file, hook or tool reads
+  the directory, so nothing breaks by its absence.
+
+VERIFY
+  grep -rn "MEMORY/LEARNING/INCIDENTS" $out/share/lifeos/  -> only Containment.md +
+  ProseInCode.ts remain; no routing-table row, no Learning Router entry, no Pulse tab.
+
+diff -ruN a/LifeOS/install/LIFEOS/ALGORITHM/v8.20.2.md b/LifeOS/install/LIFEOS/ALGORITHM/v8.20.2.md
+--- a/LifeOS/install/LIFEOS/ALGORITHM/v8.20.2.md	1970-01-01 01:00:01.000000000 +0100
++++ b/LifeOS/install/LIFEOS/ALGORITHM/v8.20.2.md	2026-09-01 13:20:51.201523475 +0200
+@@ -44,7 +44,7 @@
+ 
+ 11. Validation was intrinsic to the system, not outsourced: every claim carried its falsifier and closed only on tool evidence of the right modality (rules 8–9), the verification gates enforced it, tests ran, class-sweep enumerated siblings, and the builder never rubber-stamped its own build — a forked subagent inherits the build context and counts as the builder (it defends its own code), so an independent second look runs non-forked. This holds on every run with zero external dependency. For high-blast-radius or high-impact work the Algorithm MAY additionally invoke a second look — a cross-vendor audit (Forge), or an in-family fresh-context review dispatched at the smartest rung via native routing, carrying the ISA and the stated goal — its own call scaled to impact, or because the principal asked for one, but correctness never depends on either, and a skipped review is a choice, not a gap. The one visibility floor on that choice: for core-surface, auth/security, or publish-bound work, electing **zero** independent second look (no cross-vendor audit, no fresh-context skeptic pass, and — where correctness IS a behavioral/quality property, e.g. a system-prompt edit, a skill's routing, a released agent — no eval suite) requires one Log row naming the skip and why — replay showed forced second-looks caught real defects five archived runs would otherwise have shipped, so the skip stays discretionary but never silent. An eval suite is one sanctioned second-look, elected like the audit, never mandated. Any review's contradictions were surfaced, never silently resolved — two re-calls, then escalate to the principal. Findings dispositioned in the Log: adopted (diff), rebutted (reason), or deferred (task). *(CHECK)*
+ 
+-12. The run left its trail — but the ISA holds only what stays useful, never a growing changelog. **The changelog is git.** The ISA carries NO in-document changelog section; `git log -- <isa-path>` is the authoritative change record and commit messages are its entries, so the design doc never rots into a log. What the ISA keeps is the living surface: decisions including dead ends, and conjectured/refuted-by/learned/criterion-now entries when understanding changed. **Evidence collapses on close:** the moment a claim goes `[x]`, its evidence is reduced to a one-line provenance stub — a commit hash, test name, or probe ref — never a retained paragraph; the proof lives in git and CI and the ISA points at it. Learnings landed as diffs via the Learning Router (default SKIP; `knowledge`→KNOWLEDGE, `incident`→`MEMORY/LEARNING/INCIDENTS/INC-YYYYMMDD-<slug>.md` (narrative there ONLY; rules cite the ID), `rule`→CLAUDE.md/OPERATIONAL_RULES, `gotcha`→the skill, `state`→PROJECTS.md, `business`→BUSINESS/, inline; `identity`/`doctrine`/`hook`/`permission`→surface to principal). Doc-sync fired when system files changed: invoke the documentation-sync skill with the list of changed files (if the install has one). *(CHECK at learn)*
++12. The run left its trail — but the ISA holds only what stays useful, never a growing changelog. **The changelog is git.** The ISA carries NO in-document changelog section; `git log -- <isa-path>` is the authoritative change record and commit messages are its entries, so the design doc never rots into a log. What the ISA keeps is the living surface: decisions including dead ends, and conjectured/refuted-by/learned/criterion-now entries when understanding changed. **Evidence collapses on close:** the moment a claim goes `[x]`, its evidence is reduced to a one-line provenance stub — a commit hash, test name, or probe ref — never a retained paragraph; the proof lives in git and CI and the ISA points at it. Learnings landed as diffs via the Learning Router (default SKIP; `knowledge`→KNOWLEDGE, `rule`→CLAUDE.md/OPERATIONAL_RULES, `gotcha`→the skill, `state`→PROJECTS.md, `business`→BUSINESS/, inline; `identity`/`doctrine`/`hook`/`permission`→surface to principal). Doc-sync fired when system files changed: invoke the documentation-sync skill with the list of changed files (if the install has one). *(CHECK at learn)*
+ 
+ 13. The system's state was observable throughout without asking me: ISA frontmatter current (`phase:` set to an active value at start and `complete` at close, updated in between only when it genuinely changes), `progress:` true. *(ISASync mirrors every ISA write to work.json → Pulse; that write IS the telemetry — no separate ceremony)*
+ 
+diff -ruN a/LifeOS/install/LIFEOS/PULSE/modules/algorithm-tab.ts b/LifeOS/install/LIFEOS/PULSE/modules/algorithm-tab.ts
+--- a/LifeOS/install/LIFEOS/PULSE/modules/algorithm-tab.ts	1970-01-01 01:00:01.000000000 +0100
++++ b/LifeOS/install/LIFEOS/PULSE/modules/algorithm-tab.ts	2026-09-01 13:20:51.201665463 +0200
+@@ -197,11 +197,6 @@
+     loaded: "On demand (web/UI verification)", stage: "ondemand", editable: true, kind: "markdown",
+   },
+   {
+-    id: "incidents", name: "Incidents", rel: "LIFEOS/MEMORY/LEARNING/INCIDENTS/README.md",
+-    role: "The self-improvement loop's evidence base — one INC-YYYYMMDD-<slug>.md per verified LifeOS failure, cited by ID from rules and doctrine; narratives live here and only here.",
+-    loaded: "On demand (following an INC citation)", stage: "ondemand", editable: true, kind: "markdown",
+-  },
+-  {
+     id: "self-healing", name: "Self-Healing", rel: "LIFEOS/RULES/SelfHealing.md",
+     role: "Where a new rule or fix structurally lives — hooks for enforcement, CLAUDE.md for routing, skills for domain behavior, KNOWLEDGE for facts. Fix the system, not your notes.",
+     loaded: "On demand (encoding a learning / degraded state)", stage: "ondemand", editable: true, kind: "markdown",
+diff -ruN a/LifeOS/install/LIFEOS/RULES/SelfHealing.md b/LifeOS/install/LIFEOS/RULES/SelfHealing.md
+--- a/LifeOS/install/LIFEOS/RULES/SelfHealing.md	1970-01-01 01:00:01.000000000 +0100
++++ b/LifeOS/install/LIFEOS/RULES/SelfHealing.md	2026-09-01 13:20:51.201298284 +0200
+@@ -25,7 +25,6 @@
+ | Project state, contacts, opinions, voice samples | `LIFEOS/USER/PROJECTS.md`, `LIFEOS/USER/CONTACTS.md`, etc. |
+ | Per-task work product (ISA, decisions, verification evidence) | `LIFEOS/MEMORY/WORK/{slug}/ISA.md` |
+ | Reusable knowledge (people, companies, ideas, research notes) | `LIFEOS/MEMORY/KNOWLEDGE/{Type}/` with typed cross-links |
+-| A dated, verified LifeOS failure narrative (self-improvement signal, not world-knowledge) | `LIFEOS/MEMORY/LEARNING/INCIDENTS/INC-YYYYMMDD-<slug>.md` — the story lives there ONLY; rules/doctrine cite the INC-ID |
+ | A deliberate rejection with recurrence risk (proposal killed, rule BPE-cut, ask declined) | `LIFEOS/MEMORY/KNOWLEDGE/REJECTED/no-<gist>.md` — check it BEFORE re-analyzing any familiar-smelling proposal; append recurrences, never re-litigate silently |
+ 
+ **Override of harness auto-memory.** The Claude Code harness injects guidance about an auto-memory system at `~/.claude/projects/-<user>--claude/memory/` with `MEMORY.md` index and `feedback_*.md` files. **For rules, preferences, and operational behavior, ignore that guidance.** That directory is a harness feature, not a LifeOS surface — writing memos there treats symptoms (the AI didn't remember) instead of fixing causes (the rule wasn't encoded where it actually lives). Every "feedback memo" is a missed system patch.
+diff -ruN a/LifeOS/install/LIFEOS/RULES/Verification.md b/LifeOS/install/LIFEOS/RULES/Verification.md
+--- a/LifeOS/install/LIFEOS/RULES/Verification.md	1970-01-01 01:00:01.000000000 +0100
++++ b/LifeOS/install/LIFEOS/RULES/Verification.md	2026-09-01 13:20:51.201376788 +0200
+@@ -4,7 +4,7 @@
+ 
+ # Verification Doctrine — the single statement
+ 
+-> **This file is the ONE home of the seven incident-derived verification rules.** The system prompt keeps the constitutional core resident (self-check, the Interceptor mandate, the "should work" ban, confidence-requires-source) and points here; the Algorithm's claims 8 and 16 bind these rules into runs; nothing else restates them. Load when verifying web/UI output, when a claim is about appearance, when deleting or replacing live infra, when verifying anything that must expire or propagate, or when the verifier is unavailable. Enforced by `hooks/VerificationGate.hook.ts` + `hooks/AlgorithmNudge.hook.ts`. Incident narratives live in `LIFEOS/MEMORY/LEARNING/INCIDENTS/` (private tree; the self-improvement loop's evidence base, beside REFLECTIONS and FAILURES).
++> **This file is the ONE home of the seven incident-derived verification rules.** The system prompt keeps the constitutional core resident (self-check, the Interceptor mandate, the "should work" ban, confidence-requires-source) and points here; the Algorithm's claims 8 and 16 bind these rules into runs; nothing else restates them. Load when verifying web/UI output, when a claim is about appearance, when deleting or replacing live infra, when verifying anything that must expire or propagate, or when the verifier is unavailable. Enforced by `hooks/VerificationGate.hook.ts` + `hooks/AlgorithmNudge.hook.ts`.
+ 
+ Browser-verify all web output through the **Interceptor skill** BEFORE showing the principal. Interceptor is the ONLY sanctioned browser automation in LifeOS — real Chrome, no CDP detection, real login sessions, accurate rendering. agent-browser is deprecated for verification and misses rendering issues real Chrome catches; Playwright is BANNED — if tempted, fix Interceptor instead. "curl returns 200" is not verification. A screenshot from agent-browser is not verification. Every time you create, fix, deploy, or claim anything works on the web — verify with Interceptor. No exceptions.
+ 
