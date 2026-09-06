@@ -100,6 +100,17 @@ Each patch is an additive `.patch` with a multi-paragraph header (bug, RCA, fix 
 
 **On v7.40.4, deployed + sealed.** The 7.1.1.1 → 7.40.4 rebase (40-version upstream jump) is complete: source re-pinned, dependency trees re-vendored case-by-case, patch set re-triaged 19 → 13, and `claude-code` pinned as source-of-truth. `tests/smoke-test.sh` boots Pulse in a rootless net namespace (loopback isolated from any live instance) and asserts `/healthz` → HTTP 200, graceful `SIGTERM` shutdown (~110 ms), and the dashboard — built into the derivation via a hermetic `next build` — serving. Store→live payload durability is closed by `payload-sync` (a shipped tool plus a build-time `MANIFEST.sha256`).
 
+**Known gap — `payload-sync` never deletes.** It is copy-missing-only, so an upstream deletion or
+rename leaves the old file alive in `~/.claude` indefinitely. On the 7.1.1.0 → 7.40.4.6 jump that
+left 193 stale files on a live install, including one tool that had been dead for weeks and a
+casing-rename pair that coexisted.
+
+Fix owed, in this order: (1) `payload-sync` reports upstream removals — files present live, absent
+from the new payload, previously payload-owned — as a distinct section of its output, deleting
+nothing; (2) only once that has been lived with, decide whether removal becomes an opt-in `--prune`
+with per-class confirmation, or stays manual. Deleting on sync is destructive against a tree that
+also holds files the user owns, which is why reporting comes first.
+
 ---
 
 ## Repository structure
