@@ -8,7 +8,16 @@
     let
       # nixosModule that installs the lifeos package system-wide.
       lifeosModule = { pkgs, system ? pkgs.stdenv.hostPlatform.system, ... }: {
-        environment.systemPackages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.default ];
+        environment.systemPackages = [
+          self.packages.${pkgs.stdenv.hostPlatform.system}.default
+          # LifeOS ships ~600 .ts files (hooks, LIFEOS/TOOLS, skill tools) that bun
+          # executes by stripping types — so nothing ever type-checks them unless a
+          # checker exists. Without this, `tsc` is absent and the only way to run one
+          # is `bunx tsc`, which refetches typescript over the network per invocation.
+          # Found 2026-09-06: on a live install 612 .ts files, 84 under any tsconfig,
+          # and the first check ever run surfaced an already-dead tool.
+          pkgs.typescript
+        ];
 
         # Pulse runs as a per-user systemd service. Upstream's manage.sh generates
         # a ~/.config/systemd/user unit at install time with a macOS/Ubuntu PATH
