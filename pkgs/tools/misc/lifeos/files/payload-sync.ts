@@ -92,8 +92,10 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
-type Bucket = "CURRENT" | "TAKE_B" | "ADD" | "REVIEW" | "DELETE"
-const buckets: Record<Bucket, string[]> = { CURRENT: [], TAKE_B: [], ADD: [], REVIEW: [], DELETE: [] }
+type Bucket = "CURRENT" | "TAKE_B" | "ADD" | "REVIEW" | "DELETE" | "STALE"
+const buckets: Record<Bucket, string[]> = { CURRENT: [], TAKE_B: [], ADD: [], REVIEW: [], DELETE: [], STALE: [] }
+// STALE je poročilo, ne dejanje: nič se ne briše. Ločeno od DELETE, ki terja --old.
+const staleModified: string[] = []   // pot je bila nekoč uradna, živ hash pa ni znan → ne trdim, da je odveč
 
 // --- za vsak fajl v NOVEM payloadu (B): klasificiraj živ ---
 const absent: string[] = []   // uradno, a namenoma brez — poroča se, ne skrije
@@ -132,6 +134,30 @@ if (OLD) for (const root of ROOTS) {
   }
 }
 
+// --- A brez B, BREZ --old: uradne odstranitve prek akumuliranih hashev --------
+// Zakaj: zaznava izbrisov zgoraj visi na --old, ki je neobvezen. Ko ga klicalec ne
+// poda, se cel razred tiho ne pregleda — in prav to se je zgodilo ob 7.1.1.0 →
+// 7.40.4.6, kjer je 193 uradno odstranjenih datotek ostalo živih (med njimi orodje,
+// ki je tedne padalo ob uvozu, in par, ki se je razlikoval le v veliki črki).
+// Akumulator known-official.sha256 nosi zgodovino uradnih hashev, zato zna isto
+// povedati brez --old: živ + ni ga v B + hash je bil nekoč uraden ⇒ ostanek.
+{
+  const seen = new Set([...buckets.DELETE, ...buckets.REVIEW])
+  const liveRoots = ROOTS.map((r) => join(LIVE, r))
+  for (const dir of liveRoots) {
+    for (const lf of walk(dir)) {
+      const rel = relative(LIVE, lf)
+      if (SKIP.test("/" + rel) || seen.has(rel)) continue
+      if (existsSync(join(NEW, rel))) continue          // še vedno uraden
+      const hashes = known.get(rel)
+      if (!hashes) continue                              // pot ni bila nikoli uradna ⇒ najina, ne diram
+      const l = sha(lf)
+      if (l != null && hashes.has(l)) buckets.STALE.push(rel)
+      else staleModified.push(rel)
+    }
+  }
+}
+
 // --approve: human/skill je potrdil te REVIEW fajle kot star-uradne → TAKE_B (comma-sep rel poti)
 for (const rel of (arg("--approve", "") as string).split(",").map(s => s.trim()).filter(Boolean)) {
   const i = buckets.REVIEW.indexOf(rel)
@@ -152,6 +178,7 @@ line("TAKE_B", "živ == znan-uradni hash (A∩B) → determinističen prepis z B
 line("ADD", "nov fajl → copy-missing")
 line("REVIEW", "off-list ⇒ najin/diverged → MERGE-kandidat (B3 skill), nikoli slep prepis")
 line("DELETE", "A brez B (uradni izbris) → briši (z backupom)")
+line("STALE", "živ, ni ga v B, hash je bil nekoč uraden ⇒ ostanek migracije → SAMO POROČILO")
 console.log(`\n  pokritost: ${buckets.CURRENT.length + buckets.TAKE_B.length + buckets.ADD.length + buckets.REVIEW.length + absent.length} / ${manifestPaths.length} uradnih poti iz manifesta`)
 if (absent.length) console.log(`  namenoma brez (${absent.length}): ${absent.join(", ")}`)
 console.log(`\n── TAKE_B (živ je starejša uradna verzija → varen prepis z B): ──`)
@@ -159,6 +186,16 @@ for (const r of buckets.TAKE_B) console.log("   " + r)
 console.log(`\n── REVIEW (merge-kandidati — uradni ima update IN živ je spremenjen; skill/human zlije): ──`)
 for (const r of buckets.REVIEW) console.log("   " + r)
 if (buckets.DELETE.length) { console.log(`\n── DELETE kandidati: ──`); for (const r of buckets.DELETE) console.log("   " + r) }
+if (buckets.STALE.length) {
+  console.log(`\n── STALE (${buckets.STALE.length}): uradno odstranjeni, pri tebi še živi. NIČ SE NE BRIŠE. ──`)
+  console.log(`   Preveri jih in pobriši ročno; rename pusti obe različici hkrati, kar zna tiho ubiti orodje.`)
+  for (const r of buckets.STALE) console.log("   " + r)
+}
+if (staleModified.length) {
+  console.log(`\n── STALE? (${staleModified.length}): ni jih v B, pot je bila uradna, živ hash pa ni znan. ──`)
+  console.log(`   Lahko je tvoja sprememba uradne datoteke ali starejša izdaja pred akumulatorjem. Ne trdim, da so odveč.`)
+  for (const r of staleModified) console.log("   " + r)
+}
 
 // ── APPLY (samo z --apply; sicer dry-run) ──────────────────────────────────
 const APPLY = process.argv.includes("--apply")
