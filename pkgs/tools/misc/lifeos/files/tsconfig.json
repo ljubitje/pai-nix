@@ -20,10 +20,10 @@
     "strict": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "forceConsistentCasingInFileNames": true
-    // "types": ["bun"] is deliberately NOT set yet: bun-types is not vendored, and
-    // naming a missing type package makes tsc fail hard instead of merely reporting.
-    // Add it in the same change that lands bun-types in vendor-locks/root.bun.lock.
+    "forceConsistentCasingInFileNames": true,
+    // Vendored as of .9 (f-root-bun-types): @types/bun is in the root node_modules, so
+    // `Bun` resolves from this tree instead of accidentally from a skill's dependencies.
+    "types": ["bun"]
   },
   // Measured 2026-09-07: the first three globs reached 383 of 584 live .ts files.
   // PULSE (the daemon), ATLAS and HERMES were the bulk of the gap, so they are in.

@@ -14,7 +14,7 @@
   claude-code,
 }:
 let
-  version = "7.40.4.8"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .8 = typecheck-layer (root tsconfig.json shipped into the payload so the ~600 .ts files bun runs by stripping types are checkable at all; report-only, no gate; measured 500/584 files covered, 63 real errors); .7 = f-private-zones (private zones counted never quoted: USER register + library for probes + Read/Grep/Glob lane; Bash out of scope; no upstream file modified); .6 = payload-sync obseg iz manifesta (root fajli primerjani, namerne odsotnosti poročane); .5 = f-verification-rule8 (falsifier fidelity = rule 8; a probe whose expected side derives from the code under test cannot fail — only mutation proves it can); .4 = f-incidents-retire (INCIDENTS narrative surface retired — declared, never populated, and redundant with FAILURES/ + RecurrenceLedger; Klemen 2026-09-01); .3 = f4-e AtlasEventCapture hook unregistered (Atlas off in one piece); .2 = f4-d Atlas no-graph-egress (Inference hard-kill in PULSE/modules/atlas.ts + atlas/atlas_insights off until inference is local); .1 = claude-code 2.1.251 pinned as SoT (vendored derivation + Pulse unit path + update.sh fix); .0 = fresh upstream base (7.1.1.1 → 7.40.4 migration, patches re-triaged: 19→13, 6 DISSOLVE dropped)
+  version = "7.40.4.9"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .9 = f-root-bun-types + per-call `patches` on vendorTree (ambient Bun types vendored into the root tree so `Bun` resolves from the tree, not by accident out of one skill's node_modules); .8 = typecheck-layer (root tsconfig.json shipped into the payload so the ~600 .ts files bun runs by stripping types are checkable at all; report-only, no gate; measured 500/584 files covered, 63 real errors); .7 = f-private-zones (private zones counted never quoted: USER register + library for probes + Read/Grep/Glob lane; Bash out of scope; no upstream file modified); .6 = payload-sync obseg iz manifesta (root fajli primerjani, namerne odsotnosti poročane); .5 = f-verification-rule8 (falsifier fidelity = rule 8; a probe whose expected side derives from the code under test cannot fail — only mutation proves it can); .4 = f-incidents-retire (INCIDENTS narrative surface retired — declared, never populated, and redundant with FAILURES/ + RecurrenceLedger; Klemen 2026-09-01); .3 = f4-e AtlasEventCapture hook unregistered (Atlas off in one piece); .2 = f4-d Atlas no-graph-egress (Inference hard-kill in PULSE/modules/atlas.ts + atlas/atlas_insights off until inference is local); .1 = claude-code 2.1.251 pinned as SoT (vendored derivation + Pulse unit path + update.sh fix); .0 = fresh upstream base (7.1.1.1 → 7.40.4 migration, patches re-triaged: 19→13, 6 DISSOLVE dropped)
   src = fetchFromGitHub {
     owner = "danielmiessler";
     repo = "LifeOS";
@@ -28,9 +28,20 @@ let
   # NEXT_TELEMETRY_DISABLED (next build phones home). Lockless trees (root/tools/
   # tokenxray) get a committed lock injected; pulse/obs carry their own in src.
   # Hashes captured x86_64-linux, reproducibility-verified (vendor-locks/HASHES.txt).
-  vendorTree = { name, subdir, hash, lockFile ? null }: stdenvNoCC.mkDerivation {
+  # `patches` is per-call because a vendored tree is built from the RAW src: the main
+  # derivation's patches have not run yet here, so a lock that declares a dependency the
+  # upstream package.json lacks fails `--frozen-lockfile`. Patch the source for that tree
+  # instead of loosening the gate.
+  #
+  # WARNING, and it is the whole cost of this argument: these are fixed-output
+  # derivations, addressed by CONTENT. Change a patch or a lock and leave `hash` alone and
+  # nix serves the OLD node_modules from the store — the build goes green while the
+  # delivered tree is stale. So on every change here, deliberately falsify `hash` (all-A
+  # SRI) to force the rebuild, read the real hash out of the mismatch, and only then set
+  # it. See OPERATIONAL_RULES: "Ob spremembi locka za FOD hash namenoma ponaredi".
+  vendorTree = { name, subdir, hash, lockFile ? null, patches ? [ ] }: stdenvNoCC.mkDerivation {
     name = "lifeos-deps-${name}";
-    inherit src;
+    inherit src patches;
     nativeBuildInputs = [ bun ];
     buildPhase = ''
       export HOME=$TMPDIR NEXT_TELEMETRY_DISABLED=1
@@ -47,7 +58,7 @@ let
     outputHash = hash;
   };
   deps = {
-    root      = vendorTree { name = "root";      subdir = ".";                          hash = "sha256-PAJAbFNw7jFdQDuguSUfNOFRGJzL49P05r1fZEoiO3c="; lockFile = ./vendor-locks/root.bun.lock; };
+    root      = vendorTree { name = "root";      subdir = ".";                          hash = "sha256-hcC4I2yK4fcXn65bFjTM297goQDJh4uyO6dLBHwDPx0="; lockFile = ./vendor-locks/root.bun.lock; patches = [ ./patches/f-root-bun-types.patch ]; };
     tools     = vendorTree { name = "tools";     subdir = "LIFEOS/TOOLS";               hash = "sha256-FIBTFDHuFW6WyDSlNXr6QMi76eaFLaxKZgKwNMay5/E="; lockFile = ./vendor-locks/tools.bun.lock; };
     pulse     = vendorTree { name = "pulse";     subdir = "LIFEOS/PULSE";               hash = "sha256-2zjzLOg6UPkQa86IMj+OPiB69IQOHZhuhtuZPanKU+o="; };
     obs       = vendorTree { name = "obs";       subdir = "LIFEOS/PULSE/Observability"; hash = "sha256-dzvmq20UIVDwc9Ui0nrPzckwIH9zT5pADgYaeTI/aRk="; };
@@ -81,6 +92,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f-verification-rule8.patch  # f-verification-rule8: rule 8 falsifier fidelity (MUST stay after f-incidents-retire — both touch algorithm-tab.ts)
     ./patches/f-projects-dormant.patch # f-projects-dormant: do not force-load USER/PROJECTS.md (unbounded growth → ~53% startup ctx); opt-in via manual uncomment, on-demand via ContextSearch
     ./patches/f-projects-no-memory-writes.patch # f-projects-no-mem-writes: retire memory machinery around PROJECTS.md (reviewer proposals/tier-b/GC/freshness) — companion to dormant
+    ./patches/f-root-bun-types.patch  # f-root-bun-types: @types/bun as a devDependency of the shipped root package.json; ALSO passed to the root vendorTree, so the vendored node_modules and the delivered package.json agree
     ./patches/f-mergesettings-hooks-overlay.patch # f-mergesettings-hooks-overlay: compose LIFEOS/USER/CONFIG/hooks.user.json over official hooks.json (our hooks leave the official file → syncs cleanly, no B∩C)
   ];
 

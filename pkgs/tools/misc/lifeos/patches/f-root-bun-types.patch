@@ -1,0 +1,34 @@
+lifeos-nix patch f-root-bun-types — ambient Bun types for the shipped tree
+
+PROBLEM
+  The payload ships ~600 .ts files that bun executes by stripping types, and .8 added a
+  root tsconfig so a checker can be pointed at them. But `Bun` is a global that only
+  exists if an ambient type package is present, so a check over the tree reported 252
+  errors of the form "Cannot find name 'Bun'" — noise that drowns the ~139 real ones.
+  It resolved by accident on the live install, out of one skill's own node_modules
+  (skills/Evals pulls @types/bun transitively); remove that directory and the 252 return.
+  A toolchain fact should not depend on an unrelated skill's dependency tree.
+
+FIX
+  Declare @types/bun as a devDependency of the shipped root package.json, so the vendored
+  root node_modules carries it and `"types": ["bun"]` in the root tsconfig resolves from
+  the tree itself. Types only: no runtime dependency is added, and nothing is imported.
+  Pinned to the SAME minor as the bun the derivation runs (nixpkgs bun 1.3.13 → @types/bun
+  1.3.13). A types package a minor ahead asserts APIs the running bun may not have, which
+  would put false negatives into the very report this exists to make trustworthy.
+
+  Companion changes live in lifeos-nix, not upstream: vendor-locks/root.bun.lock gains the
+  four closure entries (@types/bun, bun-types, @types/node, undici-types) and the root
+  vendorTree hash moves accordingly.
+
+--- a/LifeOS/install/package.json	2026-09-07 16:54:43.948310970 +0200
++++ b/LifeOS/install/package.json	2026-09-07 16:54:43.969085221 +0200
+@@ -5,5 +5,8 @@
+   "description": "Shared runtime dependencies for LifeOS hooks and LIFEOS/TOOLS scripts. Deployed to <configRoot>/package.json by DeployCore.ts so `bun install` resolves node_modules for both <configRoot>/hooks/ and <configRoot>/LIFEOS/.",
+   "dependencies": {
+     "yaml": "^2.8.2"
++  },
++  "devDependencies": {
++    "@types/bun": "1.3.13"
+   }
+ }
