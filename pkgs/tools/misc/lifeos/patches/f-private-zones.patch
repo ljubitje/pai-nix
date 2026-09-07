@@ -1,0 +1,599 @@
+lifeos-nix patch f-private-zones — private zones: counted, never quoted
+
+PROBLEM
+  Archive probes run over ~/.claude/projects/*/*.jsonl, i.e. over EVERY project directory,
+  and routinely print examples. Some directories hold material that must not enter an
+  unrelated session's context: work under NDA, medical or legal notes, anything personal.
+  Upstream has no way to declare such a zone, so the only thing standing between a sweep and
+  that material is the operator remembering.
+
+  The boundary is not reading, it is CONTENT EGRESS. An aggregate is safe (totals, per-day
+  counts, durations); an excerpt is not. And the distinction that survives scrutiny is
+  NARRATED vs RAW: a curated first-person hand-off note may cross a threshold, a raw
+  transcript may not.
+
+SOLUTION
+  - LIFEOS/TOOLS/PrivateZones.ts — the register-driven classifier and the actual protection.
+    Archive probes call splitBySensitivity/bucketLabel, which count every zone without ever
+    naming one. Absent register = feature OFF (opt-in). Present but malformed = FAIL CLOSED.
+    Private beats public whatever the pattern lengths; narrated artifacts cross even from
+    inside a zone; unregistered project dirs are quote-closed and count-open. `--unregistered`
+    lists what awaits triage, warns (exit 3) when a register is declared with no hook wired,
+    and exits non-zero on an unusable register.
+  - hooks/PrivateZoneEgressGuard.hook.ts — the backstop on the tools whose path is a FIELD:
+    Read, Grep, Glob, NotebookRead. Classify the field, refuse anything not quotable. No
+    tokenising, no verb lists, no glob semantics.
+  - USER/CONFIG/private-zones.example.json + hooks.user.json — the register template and the
+    registration, in the ours-zone overlay that MergeSettings composes over the official
+    hooks.json.
+
+SCOPE, stated rather than half-guarded
+  Bash is NOT covered. `cat <zone>/x` is not refused. An earlier version guarded it and
+  twenty-five of twenty-seven review rounds went into deciding, from the text of an arbitrary
+  shell command, what it would read; every fix opened a new spelling (quotes, sh -c, a
+  two-step cd, *, ?, [st], {t,x}, wrapper words, redirections, a mkdir decoy that forged the
+  own-room grant), and it twice broke real work with false positives. Parsing shell is not a
+  sequence of bugs to fix, so the lane is gone and the promise is not made.
+
+MODIFIES NO UPSTREAM FILE
+  The patch only CREATES four files. Registration lives in the USER overlay, which is where
+  f-mergesettings-hooks-overlay says our additions belong so hooks.json stays pure-official.
+  default.nix carries a postPatch chmod, because `diff` cannot express a mode and a hook
+  without +x fails 126 — read as a non-blocking error, i.e. a silent no-op.
+
+KNOWN LIMITS
+  - The example register and the overlay reach a fresh install through ScaffoldUser, which
+    copy-MISSES: an install that already has hooks.user.json never receives ours. That is why
+    `--unregistered` carries the wiring self-check, which reads the COMPOSED settings.json
+    rather than the delivery path it is complaining about.
+  - A rule is a path-SEGMENT pattern, not a root anchor. It REFUSES on a substring match but
+    only GRANTS the own-room allowance on a path boundary, so a fragment-shaped rule blocks
+    everywhere and grants nowhere.
+  - Matching is textual for rules and resolved for paths (both spellings, symlinks included).
+    A path assembled at runtime by a probe that does not use the library is not seen.
+
+TESTS
+  tests/private-zones/run.sh materialises this patch into a temp tree and runs the suite
+  against it, including an end-to-end assertion through the real hook process.
+
+diff -ruN a/LifeOS/install/hooks/PrivateZoneEgressGuard.hook.ts b/LifeOS/install/hooks/PrivateZoneEgressGuard.hook.ts
+--- a/LifeOS/install/hooks/PrivateZoneEgressGuard.hook.ts	1970-01-01 01:00:00.000000000 +0100
++++ b/LifeOS/install/hooks/PrivateZoneEgressGuard.hook.ts	2026-09-07 14:29:08.166248767 +0200
+@@ -0,0 +1,227 @@
++#!/usr/bin/env bun
++/**
++ * @version 4.0.0
++ * PrivateZoneEgressGuard.hook.ts — PreToolUse lane for private zones (Read/Grep/Glob).
++ *
++ * INVARIANT: private zones are COUNTED, never QUOTED. A declared zone's raw content must not
++ * enter the context of an unrelated session; a NARRATED account of it may.
++ *
++ * WHY THIS FILE IS SMALL AGAIN (v4, Klemen's cut after 27 review rounds).
++ * v3 also guarded Bash. Twenty-five of those rounds were spent on that one lane, because it
++ * had to decide, from the TEXT of an arbitrary shell command, what the command would read.
++ * Every fix opened a new spelling: quotes, `sh -c`, a two-step `cd`, `*`, `?`, `[st]`,
++ * `{t,x}`, wrapper words, redirections, and a `mkdir` decoy that forged the own-room grant.
++ * That is not a sequence of bugs, it is a property of parsing shell, and it twice broke real
++ * work with false positives.
++ *
++ * So the Bash lane is gone. What remains is the half that was always sound:
++ *
++ *   STRUCTURED TOOLS — the path is a FIELD, not a shell string. Classify it and refuse
++ *   anything not quotable. No tokenising, no verb lists, no glob semantics.
++ *
++ *   THE LIBRARY — `LIFEOS/TOOLS/PrivateZones.ts` is what archive probes call
++ *   (splitBySensitivity, bucketLabel). The threat that started this was a probe of mine
++ *   printing examples from every project directory, and that is exactly what the library
++ *   answers. It is the protection; this hook is the backstop on the tool I reach for most.
++ *
++ * WHAT IS DELIBERATELY NOT COVERED: a shell command. `cat <zone>/x` is not refused. Stated
++ * plainly rather than half-guarded, because a half-guard reads as a promise.
++ *
++ * Fail policy: fail-OPEN on an internal error (a bug in a guard must not wedge a tool);
++ * fail-CLOSED on a register that exists and is unusable; silent when no register exists.
++ */
++
++import { existsSync, realpathSync, statSync } from "node:fs";
++import { homedir } from "node:os";
++import { createRequire } from "node:module";
++import { resolve } from "node:path";
++
++type PZ = typeof import("../LIFEOS/TOOLS/PrivateZones");
++type Register = ReturnType<PZ["loadRegister"]>;
++
++/**
++ * The library is resolved LAZILY and in isolation. A top-level import made this the first
++ * hook to reach out of `hooks/`, and a missing file then killed the whole dispatcher — every
++ * PreToolUse guard that predates this one went silent with it. A new control must never be
++ * able to switch off the controls it joins.
++ */
++let pz: PZ | null | undefined;
++function lib(): PZ | null {
++  if (pz !== undefined) return pz;
++  const req = createRequire(import.meta.url);
++  for (const spec of ["../LIFEOS/TOOLS/PrivateZones.ts", "../LIFEOS/TOOLS/PrivateZones"]) {
++    try { pz = req(spec) as PZ; return pz; } catch { /* try the next spelling */ }
++  }
++  pz = null;
++  // Silence is the one failure this module forbids: say so when a register exists.
++  try {
++    if (existsSync(registerPath())) {
++      console.error("[PrivateZoneEgressGuard] LIFEOS/TOOLS/PrivateZones.ts is missing; zone enforcement is OFF while a register exists.");
++    }
++  } catch { /* diagnostics must never throw */ }
++  return pz;
++}
++
++/** The register path, derivable without the library so the off-switch costs nothing. */
++function registerPath(): string {
++  const root = process.env.CLAUDE_CONFIG_DIR || `${process.env.HOME ?? homedir()}/.claude`;
++  return `${root}/LIFEOS/USER/CONFIG/private-zones.json`;
++}
++
++/** Symlinks are paths too: a link into a zone reaches the zone. */
++function realish(p: string): string {
++  try { return realpathSync.native(p); } catch { return p; }
++}
++
++/** True only for a regular file. A directory wearing the name is not the narrative. */
++function isFile(p: string): boolean {
++  try { return statSync(p).isFile(); } catch { return false; }
++}
++
++interface HookInput { tool_name?: string; cwd?: string; tool_input?: Record<string, unknown> }
++
++/**
++ * Root-shaped fields only, plus a pattern that is itself a path. A Grep `pattern` is a
++ * content filter, not a root, so a bare regex never counts.
++ */
++function pathFields(input: Record<string, unknown> | undefined): string[] {
++  const out: string[] = [];
++  for (const [k, v] of Object.entries(input ?? {})) {
++    if (typeof v !== "string") continue;
++    if (/(^|_)(path|dir|file)s?$/i.test(k)) out.push(v);
++    // A pattern counts when it carries a PATH separator: requiring a leading `/`, `~` or
++    // `./` let `Glob{pattern:"<zone>/**"}` read the zone while `./<zone>/**` was refused, and
++    // resolving every pattern turned a bare content regex equal to a zone name into a block.
++    else if (/^(pattern|glob)$/i.test(k) && v.includes("/")) out.push(v);
++  }
++  return out;
++}
++
++export function check(input: HookInput, reg?: Register): { block: true; message: string } | null {
++  try {
++    if (!reg && !existsSync(registerPath())) return null; // opt-in, and off is free
++    const tool = input?.tool_name ?? "";
++    if (!/^(Read|Grep|Glob|NotebookRead)$/.test(tool)) return null; // Bash is not ours (v4)
++
++    const L = lib();
++    if (!L) return null;
++    const register = reg ?? L.loadRegister();
++    if (register.state === "absent") return null;
++
++    const HOME = process.env.HOME ?? homedir();
++    const cwd = typeof input?.cwd === "string" ? input.cwd : "";
++    // Both spellings of every field: tokens were resolved while rules were not, so a symlink
++    // anywhere in the path used to switch an absolute rule off.
++    const fields = pathFields(input?.tool_input).flatMap((f) => {
++      const lit = resolve(cwd || HOME, f.replace(/^~(?=\/|$)/, HOME));
++      const real = realish(lit);
++      return real === lit ? [lit] : [lit, real];
++    });
++
++    if (register.state === "broken") {
++      // Closed means closed: a pathless Grep/Glob is a RECURSIVE read from cwd, and letting
++      // it through at the one moment nothing is known was the weakest possible reading of
++      // fail-closed. The repair loop stays open.
++      if (fields.length > 0 &&
++          fields.every((f) => f === L.REGISTER_PATH || f.endsWith("private-zones.json"))) return null;
++      return blocked("register unusable", tool, "the register exists but could not be parsed; failing closed");
++    }
++    if (fields.length === 0) return null;
++
++    /**
++     * The own room is a CONCRETE directory, not the rule text: keying the grant on the rule
++     * turned one `mkdir -p /tmp/decoy/<rule> && cd` into a key for the real zone. The root is
++     * the SHORTEST prefix of cwd satisfying the rule, in both spellings.
++     */
++    const inZone = (p: string, m: string): boolean => {
++      const bare = m.replace(/\/+$/, "");
++      const seg = bare.startsWith("/") ? `${bare}/` : `/${bare}/`;
++      return `${p.replace(/\/+$/, "")}/`.includes(seg) || p === bare;
++    };
++    const zoneRootOf = (p: string, m: string): string | null => {
++      const parts = p.split("/");
++      for (let i = 2; i <= parts.length; i++) {
++        const cand = parts.slice(0, i).join("/");
++        if (inZone(cand, m)) return cand;
++      }
++      return null;
++    };
++    const cwdZones: string[] = [];
++    if (cwd) {
++      for (const r of register.private) {
++        for (const c of [resolve(cwd), realish(resolve(cwd))]) {
++          const root = zoneRootOf(c, r.match);
++          if (root) for (const form of [root, realish(root)]) if (!cwdZones.includes(form)) cwdZones.push(form);
++        }
++      }
++    }
++    const inOwnRoom = (t: string) => cwdZones.some((z) => t === z || t.startsWith(`${z}/`));
++
++    for (const f of fields) {
++      if (inOwnRoom(f)) continue;                                    // the room reads itself
++      // A FILE, not merely a matching name: `mkdir <zone>/HANDOFF.md` exempted the whole
++      // subtree below it, which is the same forgeable-capability shape the own-room grant was
++      // hardened against. A narrated artifact is a document, so it must be one on disk.
++      if (register.narratedExempt.some((r) => f.endsWith(r.match)) && isFile(f)) continue;
++      if (register.private.some((r) => L.matchesRule(f, r.match))) {
++        return blocked(register.private.find((r) => L.matchesRule(f, r.match))?.match ?? "private zone", tool, undefined, f);
++      }
++      // The quote-closed default for project directories nobody has triaged yet.
++      if (underProjects(f, L) && classifyEither(f, register, L) === "unregistered") {
++        return blocked("unclassified project directory", tool, "not yet triaged; quote-closed by default", f);
++      }
++    }
++    return null;
++  } catch { return null; }
++}
++
++/** One question, both spellings: `underProjects` resolves, so `classify` must be asked both. */
++function classifyEither(t: string, reg: Register, L: PZ): "private" | "public" | "unregistered" {
++  const a = L.classify(t, reg);
++  if (a !== "unregistered") return a;
++  const r = realish(t);
++  return r === t ? a : L.classify(r, reg);
++}
++
++function underProjects(t: string, L: PZ): boolean {
++  return t.startsWith(`${L.PROJECTS_DIR}/`) || realish(t).startsWith(`${realish(L.PROJECTS_DIR)}/`);
++}
++
++function blocked(zone: string, tool: string, why?: string, path?: string): { block: true; message: string } {
++  return {
++    block: true,
++    message: [
++      "",
++      "═══════════════════════════════════════════════════════════════════════════",
++      `  PrivateZoneEgressGuard — ${tool} into a private zone BLOCKED.`,
++      "═══════════════════════════════════════════════════════════════════════════",
++      "",
++      `  Zone:     ${zone}${why ? `  (${why})` : ""}`,
++      ...(path ? [`  Path:     ${path}`] : []),
++      "",
++      "  This call would pull raw private-zone content into the context of an",
++      "  unrelated session. Context is what the assistant IS at a given moment,",
++      "  so this is a blend, not merely a copy. Narrated accounts may cross;",
++      "  raw records may not.",
++      "",
++      "  Invariant: private zones are COUNTED, never QUOTED. To count a zone use",
++      "  LIFEOS/TOOLS/PrivateZones.ts (splitBySensitivity, bucketLabel): it counts",
++      "  every zone without ever naming one.",
++      "",
++      "  Register: LIFEOS/USER/CONFIG/private-zones.json",
++      "═══════════════════════════════════════════════════════════════════════════",
++      "",
++    ].join("\n"),
++  };
++}
++
++/** Standalone entry: stderr + exit 2 blocks, exit 0 allows, any internal failure allows. */
++if (import.meta.main) {
++  let input: HookInput = {};
++  try { input = JSON.parse(await Bun.stdin.text()); } catch { process.exit(0); }
++  try {
++    const res = check(input);
++    if (res?.block) { console.error(res.message); process.exit(2); }
++  } catch { /* fail open */ }
++  process.exit(0);
++}
+diff -ruN a/LifeOS/install/LIFEOS/TOOLS/PrivateZones.ts b/LifeOS/install/LIFEOS/TOOLS/PrivateZones.ts
+--- a/LifeOS/install/LIFEOS/TOOLS/PrivateZones.ts	1970-01-01 01:00:00.000000000 +0100
++++ b/LifeOS/install/LIFEOS/TOOLS/PrivateZones.ts	2026-09-07 14:28:40.428184245 +0200
+@@ -0,0 +1,256 @@
++#!/usr/bin/env bun
++/**
++ * @version 3.0.0
++ * PrivateZones — data classification for archive sweeps and tool reads.
++ *
++ * INVARIANT: private zones are COUNTED, never QUOTED.
++ *
++ * Archive probes run over `~/.claude/projects/*​/*.jsonl`, i.e. over EVERY project
++ * directory. Some hold material that must not be pulled into an unrelated context: work
++ * under NDA, medical or legal notes, anything personal. The boundary is not reading, it is
++ * CONTENT EGRESS. An aggregate is safe (totals, rates, durations, per-day counts); an
++ * excerpt is not (snippets, quotes, first-line previews, top-K words).
++ *
++ * WHY: context is what the assistant IS at a given moment, so pulling raw material from one
++ * zone into another is a blend, not a copy. The human analogue is not recall — recall
++ * arrives tagged as memory, attenuated, self-model intact. A raw transcript arrives
++ * untagged, verbatim, in the same modality as the live conversation. That is replay.
++ *
++ * Hence: NARRATED may cross a threshold, RAW may not. A curated first-person account is the
++ * assistant's analogue of memory and may cross (`narratedExempt`); a raw record may not.
++ *
++ * OPT-IN, THEN FAIL SAFE (v3, after review):
++ *   - No register file at all      → the feature is OFF. Nothing is declared, nothing is
++ *                                    withheld. A user who never configures zones is not
++ *                                    silently locked out of their own archive.
++ *   - Register present but broken  → FAIL CLOSED. Everything classifies private and the
++ *                                    guard blocks; a declared intent must never degrade
++ *                                    into silence.
++ *   - Register present and valid   → declared zones apply; unregistered project dirs are
++ *                                    quote-closed, count-open.
++ *
++ * The list lives in `LIFEOS/USER/CONFIG/private-zones.json` (USER zone: a payload sync never
++ * overwrites it, and no personal path is ever carried in SYSTEM code). This module and
++ * `hooks/PrivateZoneEgressGuard.hook.ts` read the same register.
++ *
++ * STATUS: the narrated/raw rule was derived in one session (2026-09-05) and has not been
++ * tested against a second case. Best available rule, not a settled one.
++ */
++
++import { existsSync, readFileSync, readdirSync } from "node:fs";
++import { homedir } from "node:os";
++import { join } from "node:path";
++
++const HOME = process.env.HOME ?? homedir();
++// Every neighbouring tool resolves the config root this way; hardcoding ~/.claude made a
++// CLAUDE_CONFIG_DIR install read no register at all, i.e. the control was silently off —
++// the one failure mode this module's own doc forbids.
++const CONFIG_ROOT = process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude");
++export const REGISTER_PATH = join(CONFIG_ROOT, "LIFEOS/USER/CONFIG/private-zones.json");
++export const PROJECTS_DIR = join(CONFIG_ROOT, "projects");
++export const PRIVATE_BUCKET = "private";
++
++export interface ZoneRule { match: string; why?: string; since?: string }
++export type RegisterState = "absent" | "valid" | "broken";
++export interface Register {
++  state: RegisterState;
++  private: ZoneRule[];
++  public: ZoneRule[];
++  narratedExempt: ZoneRule[];
++}
++
++const okRules = (v: unknown): v is ZoneRule[] =>
++  Array.isArray(v) && v.every((r) => r && typeof r === "object" && typeof (r as ZoneRule).match === "string" && (r as ZoneRule).match.length > 0);
++
++// An archive sweep classifies thousands of paths; without a cache each one re-read and
++// re-parsed the register. Keyed on path + CONTENT HASH: mtime and size are preserved by
++// `cp -p`, `rsync -t` and `tar -x`, so a restore used to serve the pre-restore verdict.
++let cache: { key: string; reg: Register } | null = null;
++
++export function loadRegister(path: string = REGISTER_PATH): Register {
++  if (!existsSync(path)) return { state: "absent", private: [], public: [], narratedExempt: [] };
++  let key = path;
++  // mtime alone is not identity: `cp -p`, `rsync -t` and `tar -x` preserve it to the
++  // nanosecond, so a restore served the pre-restore verdict. Size and inode break that tie.
++  // Content hash, not stat: an in-place rewrite that preserves mtime AND length (cp -p over
++  // a same-size file, or a one-character edit plus `touch -r`) served the old verdict.
++  let body = "";
++  try { body = readFileSync(path, "utf8"); key = `${path}:${Bun.hash(body)}`; }
++  catch { /* fall through to a fresh read */ }
++  if (cache?.key === key) return cache.reg;
++  try {
++    const raw = JSON.parse(body || readFileSync(path, "utf8"));
++    // A file that parses but declares none of the three keys is a typo, not a configuration:
++    // `{"privateZones": […]}` used to read as valid-with-zero-rules and protect nothing.
++    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("not an object");
++    if (!("private" in raw) && !("public" in raw) && !("narratedExempt" in raw)) throw new Error("no rule keys");
++    // `?? []` turned an explicit null into a valid register protecting nothing, which is the
++    // same "parses but protects nothing" state the key check above closes.
++    const pick = (k: string) => (k in raw ? raw[k] : []);
++    const priv = pick("private"), pub = pick("public"), nar = pick("narratedExempt");
++    if (!okRules(priv) || !okRules(pub) || !okRules(nar)) throw new Error("malformed rule array");
++    const reg: Register = { state: "valid", private: priv, public: pub, narratedExempt: nar };
++    cache = { key, reg };
++    return reg;
++  } catch {
++    const reg: Register = { state: "broken", private: [], public: [], narratedExempt: [] };
++    cache = { key, reg };
++    return reg;
++  }
++}
++
++/** `"/vault/"` and `"/vault"` name the same directory. Shared by the library and the guard. */
++export function matchesRule(t: string, match: string): boolean {
++  const bare = match.replace(/\/+$/, "");
++  // The third disjunct is the directory ITSELF with no trailing slash: without it a rule
++  // written `proj-vault/` left its own directory "unregistered", and the triage CLI — whose
++  // whole job is printing names — printed a declared zone's name.
++  // The suffix must not double the separator: for a root-anchored rule ("/vault/") the naive
++  // `/${bare}` builds "//vault", so the zone DIRECTORY itself matched nothing — only paths
++  // strictly inside it did, and both lanes let the directory be read whole.
++  const suffix = bare.startsWith("/") ? bare : `/${bare}`;
++  // `t === bare` was unreachable: every caller passes a resolved absolute path, for which
++  // endsWith already answers. Deleted rather than tested.
++  return t.includes(match) || t.endsWith(suffix);
++}
++
++export type Classification = "private" | "public" | "unregistered";
++
++/**
++ * Order is load-bearing and is the whole safety argument:
++ *   1. broken register  → private (fail closed)
++ *   2. absent register  → public  (feature off; nothing declared)
++ *   3. narratedExempt   → public  (a narrated artifact may cross even from inside a zone;
++ *                                  what blends zones is the RAW record, not an account of it)
++ *   4. private rule     → private (wins over any public rule, whatever their lengths)
++ *   5. public rule      → public
++ *   6. otherwise        → unregistered (quote-closed, count-open)
++ * Rule 4 exists because the first draft ranked by longest match and a test knocked it down:
++ * a longer PUBLIC pattern beat a shorter PRIVATE one on a path inside the private zone.
++ */
++export function classify(pathOrDir: string, reg: Register = loadRegister()): Classification {
++  if (reg.state === "broken") return "private";
++  if (reg.state === "absent") return "public";
++  // endsWith, not includes: the hook learned this a pass earlier and the library did not,
++  // so `HANDOFF.md.rawtranscript.jsonl` classified public while the guard blocked it. Every
++  // probe using splitBySensitivity/safeExcerpt would have quoted it out.
++  if (reg.narratedExempt.some((r) => pathOrDir.endsWith(r.match))) return "public";
++  // matchesRule, not includes: a rule written with a trailing slash otherwise left its own
++  // directory "unregistered", and --unregistered then printed a declared zone by name.
++  if (reg.private.some((r) => matchesRule(pathOrDir, r.match))) return "private";
++  // matchesRule here too: the private branch was fixed for trailing slashes a pass earlier
++  // and this one was not, so a declared PUBLIC directory read as unregistered.
++  if (reg.public.some((r) => matchesRule(pathOrDir, r.match))) return "public";
++  return "unregistered";
++}
++
++export function isQuotable(pathOrDir: string, reg?: Register): boolean {
++  return classify(pathOrDir, reg) === "public";
++}
++/** Everything is countable: aggregates never lose rows. */
++export function isCountable(_pathOrDir: string): boolean { return true; }
++export function isPrivate(pathOrDir: string, reg?: Register): boolean {
++  return classify(pathOrDir, reg) === "private";
++}
++
++export function splitBySensitivity(paths: string[], reg?: Register): { quotable: string[]; countableOnly: string[] } {
++  const quotable: string[] = [], countableOnly: string[] = [];
++  for (const p of paths) (isQuotable(p, reg) ? quotable : countableOnly).push(p);
++  return { quotable, countableOnly };
++}
++
++/** A row label is data too: non-quotable zones collapse into one unlabelled bucket. */
++export function bucketLabel(dir: string, reg?: Register): string {
++  return isQuotable(dir, reg) ? dir : PRIVATE_BUCKET;
++}
++
++export function assertQuotable(pathOrDir: string, reg?: Register): void {
++  if (!isQuotable(pathOrDir, reg)) {
++    throw new Error(
++      `PrivateZones: text egress from a ${classify(pathOrDir, reg)} zone is refused (${pathOrDir}). ` +
++        `Zones are counted, never quoted — use a coarse aggregate.`,
++    );
++  }
++}
++
++export function safeExcerpt<T>(pathOrDir: string, make: () => T, reg?: Register): T | null {
++  return isQuotable(pathOrDir, reg) ? make() : null;
++}
++
++/** A narrow aggregate is an excerpt in disguise: a per-dir breakdown reveals the zone label. */
++export type AggregateAxis = "total" | "per-day" | "per-dir";
++export function assertCoarseAggregate(pathOrDir: string, axis: AggregateAxis, reg?: Register): void {
++  if (!isQuotable(pathOrDir, reg) && axis === "per-dir") {
++    throw new Error(`PrivateZones: a per-dir breakdown reveals the zone label (${pathOrDir}). Use bucketLabel().`);
++  }
++}
++
++/**
++ * Only meaningful for a VALID register: a broken one classifies everything private and an
++ * absent one classifies everything public, so both yield [] on their own. A state guard here
++ * would be dead code claiming to be a safety check — the CLI checks state before calling.
++ */
++/**
++ * Is a register declared while no hook is registered to enforce it?
++ *
++ * The registration ships in `USER/CONFIG/hooks.user.json`, which `ScaffoldUser` only
++ * copy-MISSES and payload-sync skips entirely, so an install that already has that file can
++ * never receive ours. A register would then exist with nothing behind it, and silence is the
++ * one failure this module forbids — so the triage CLI says it out loud, and it reads the
++ * COMPOSED settings rather than the delivery path it is complaining about.
++ */
++export function wiringWarning(): string | null {
++  if (loadRegister().state === "absent") return null;
++  const root = process.env.CLAUDE_CONFIG_DIR || join(process.env.HOME ?? homedir(), ".claude");
++  try {
++    const settings = readFileSync(join(root, "settings.json"), "utf8");
++    // The Read/Grep/Glob matcher specifically: a settings file that registers the hook under
++    // some OTHER matcher is exactly the half-wired state this is meant to catch.
++    if (/"matcher"\s*:\s*"[^"]*Read[^"]*"[\s\S]{0,400}?PrivateZoneEgressGuard/.test(settings)) return null;
++  } catch { /* unreadable settings: warn rather than assume */ }
++  return `A register is declared but no PreToolUse entry runs PrivateZoneEgressGuard.
++  Zone enforcement is OFF. Add it to ${join(root, "LIFEOS/USER/CONFIG/hooks.user.json")}:
++    { "hooks": { "PreToolUse": [
++        { "matcher": "Read|Grep|Glob", "hooks": [{ "type": "command",
++          "command": "$HOME/.claude/hooks/PrivateZoneEgressGuard.hook.ts" }] } ] } }
++  It takes effect at the next session start, when MergeSettings composes the overlay.`;
++}
++
++export function unregistered(projectsDir: string = PROJECTS_DIR, reg: Register = loadRegister()): string[] {
++  let dirs: string[] = [];
++  try { dirs = readdirSync(projectsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name); }
++  catch { return []; }
++  // Full paths, as every other caller passes: a slash-bearing rule can never match a bare
++  // directory NAME, so the triage CLI was printing declared zones by name.
++  return dirs.filter((d) => classify(`${projectsDir}/${d}`, reg) === "unregistered").sort();
++}
++
++if (import.meta.main) {
++  if (process.argv.includes("--unregistered")) {
++    const warn = wiringWarning();
++    if (warn) {
++      // Non-zero: a gate reading only the exit code used to see green while enforcement was
++      // off, which is the same silence this whole check exists to break.
++      console.error(`⚠️  ${warn}\n`);
++      process.exit(3);
++    }
++    const reg = loadRegister();
++    // An all-clear must never be printable when the register is unusable: a broken file and
++    // an empty triage list produce the same zero-length array, so state is reported first.
++    if (reg.state === "broken") {
++      console.error(`❌ Register unusable (parse or shape error): ${REGISTER_PATH}\n   Failing closed: every path classifies private until it is fixed.`);
++      process.exit(2);
++    }
++    if (reg.state === "absent") {
++      console.log(`ℹ️  No register at ${REGISTER_PATH} — zone classification is OFF. Copy private-zones.example.json to start.`);
++      process.exit(0);
++    }
++    const list = unregistered(PROJECTS_DIR, reg);
++    if (list.length === 0) { console.log("✅ Every project directory is classified."); process.exit(0); }
++    console.log(`⚠️  ${list.length} unclassified director${list.length === 1 ? "y" : "ies"} (quote-closed, count-open):\n`);
++    for (const d of list) console.log(`  ${d}`);
++    console.log(`\nClassify them in ${REGISTER_PATH}`);
++    process.exit(1);
++  }
++  console.log("usage: PrivateZones.ts --unregistered");
++}
+diff -ruN a/LifeOS/install/USER/CONFIG/hooks.user.json b/LifeOS/install/USER/CONFIG/hooks.user.json
+--- a/LifeOS/install/USER/CONFIG/hooks.user.json	1970-01-01 01:00:00.000000000 +0100
++++ b/LifeOS/install/USER/CONFIG/hooks.user.json	2026-09-07 14:28:40.433011682 +0200
+@@ -0,0 +1,15 @@
++{
++  "hooks": {
++    "PreToolUse": [
++      {
++        "matcher": "Read|Grep|Glob",
++        "hooks": [
++          {
++            "type": "command",
++            "command": "$HOME/.claude/hooks/PrivateZoneEgressGuard.hook.ts"
++          }
++        ]
++      }
++    ]
++  }
++}
+\ No newline at end of file
+diff -ruN a/LifeOS/install/USER/CONFIG/private-zones.example.json b/LifeOS/install/USER/CONFIG/private-zones.example.json
+--- a/LifeOS/install/USER/CONFIG/private-zones.example.json	1970-01-01 01:00:00.000000000 +0100
++++ b/LifeOS/install/USER/CONFIG/private-zones.example.json	2026-09-06 21:45:04.049756478 +0200
+@@ -0,0 +1,25 @@
++{
++  "$comment": "Template. Copy to private-zones.json and declare your own zones; while no private-zones.json exists the feature stays OFF. The operative line: NARRATED may cross a threshold, RAW may not. Private zones are COUNTED by archive sweeps, never QUOTED. Unregistered project directories default to quote-closed, count-open — run `bun LIFEOS/TOOLS/PrivateZones.ts --unregistered` to see what awaits triage. A match is a path-SEGMENT pattern, not a root anchor: \"/vault/\" means any directory named vault, anywhere. Write more of the path (\"/srv/vault/\") to pin one location. Prefer path-segment-shaped matches (e.g. \"-myorg-client-acme\", \"/vault/\") over short substrings, which collide with ordinary text. Note the asymmetry: a rule REFUSES on a substring match but only GRANTS the own-room allowance on a path-boundary match, so a session working inside its own zone needs a rule that lines up with a whole directory segment.",
++  "version": 1,
++  "private": [
++    {
++      "match": "-client-acme",
++      "why": "example: work under NDA",
++      "since": "2026-01-01"
++    }
++  ],
++  "public": [
++    {
++      "match": "-proj-work",
++      "why": "example: ordinary project",
++      "since": "2026-01-01"
++    }
++  ],
++  "narratedExempt": [
++    {
++      "match": "/HANDOFF.md",
++      "why": "example: first-person hand-off note written for a crossing",
++      "since": "2026-01-01"
++    }
++  ]
++}
+\ No newline at end of file
