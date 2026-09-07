@@ -158,6 +158,58 @@ if (OLD) for (const root of ROOTS) {
   }
 }
 
+// --- drevesa odvisnosti: payload jih nosi, ta sync jih po zasnovi ne prenaša ----
+// SKIP zgoraj izloči node_modules, ker so drevesa velika in jih postavlja install.
+// Posledica je slepa pega: nova vendorirana odvisnost nikoli ne pride do že
+// namesceneega sistema, in nihce tega ne pove. 2026-09-07 je to pomenilo, da so
+// bili trije `skills/Evals/Tools/*` mrtvi ob uvozu, ker `@langwatch/scenario`
+// ni bilo nikjer — payload ga je imel, zivo drevo pa ne. Zato: samo poročilo.
+// Manjkajoce drevo samo po sebi ni okvara: bun in node iscejo navzgor, zato se
+// odvisnost lahko razresi iz prednikovega node_modules. Zato za vsako deklarirano
+// odvisnost preverimo, ali je kje po poti navzgor — sicer poročilo laje po nedolznem.
+function unresolvedDeps(relDir: string): string[] {
+  let declared: string[] = []
+  try {
+    const pj = JSON.parse(readFileSync(join(NEW, relDir, "package.json"), "utf8"))
+    declared = Object.keys({ ...(pj.dependencies ?? {}) })
+  } catch { return [] }
+  const out: string[] = []
+  for (const dep of declared) {
+    let dir = relDir, found = false
+    for (;;) {
+      if (existsSync(join(LIVE, dir, "node_modules", dep))) { found = true; break }
+      if (!dir) break
+      dir = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : ""
+    }
+    if (!found) out.push(dep)
+  }
+  return out
+}
+
+const depsMissing: Array<{ where: string; payload: number; unresolved: string[] }> = []
+{
+  const countEntries = (d: string): number => { try { return readdirSync(d).length } catch { return 0 } }
+  const seek = (relDir: string, depth: number): void => {
+    if (depth > 4) return
+    const abs = join(NEW, relDir)
+    let entries: import("node:fs").Dirent[]
+    try { entries = readdirSync(abs, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.isSymbolicLink()) continue
+      const rel = relDir ? `${relDir}/${e.name}` : e.name
+      if (e.name === "node_modules") {
+        const inPayload = countEntries(join(NEW, rel))
+        if (inPayload > 0 && countEntries(join(LIVE, rel)) === 0)
+          depsMissing.push({ where: relDir || ".", payload: inPayload, unresolved: unresolvedDeps(relDir) })
+        continue   // ne hodi v drevo odvisnosti
+      }
+      if (e.name === ".git" || e.name === "MEMORY" || e.name === "USER") continue
+      seek(rel, depth + 1)
+    }
+  }
+  seek("", 0)
+}
+
 // --approve: human/skill je potrdil te REVIEW fajle kot star-uradne → TAKE_B (comma-sep rel poti)
 for (const rel of (arg("--approve", "") as string).split(",").map(s => s.trim()).filter(Boolean)) {
   const i = buckets.REVIEW.indexOf(rel)
@@ -190,6 +242,18 @@ if (buckets.STALE.length) {
   console.log(`\n── STALE (${buckets.STALE.length}): uradno odstranjeni, pri tebi še živi. NIČ SE NE BRIŠE. ──`)
   console.log(`   Preveri jih in pobriši ročno; rename pusti obe različici hkrati, kar zna tiho ubiti orodje.`)
   for (const r of buckets.STALE) console.log("   " + r)
+}
+if (depsMissing.length) {
+  const broken = depsMissing.filter((d) => d.unresolved.length > 0)
+  console.log(`\n── ODVISNOSTI (${depsMissing.length}): payload jih nosi, zivo drevo pa jih nima. ──`)
+  console.log(`   Ta sync jih NE prenasa (node_modules so v SKIP); postavi jih install ali roka.`)
+  for (const d of depsMissing) {
+    const verdict = d.unresolved.length
+      ? `‼️ MRTVO ob uvozu — ni razresljivo niti navzgor: ${d.unresolved.join(", ")}`
+      : `ok — vse deklarirane odvisnosti se razresijo iz prednikovega drevesa`
+    console.log(`   ${d.where}  (${d.payload} v payloadu, 0 zivih)\n       ${verdict}`)
+  }
+  if (broken.length) console.log(`   ⇒ ${broken.length} mesto(a) je zares mrtvo; ostalo je le neenakost, ne okvara.`)
 }
 if (staleModified.length) {
   console.log(`\n── STALE? (${staleModified.length}): ni jih v B, pot je bila uradna, živ hash pa ni znan. ──`)
