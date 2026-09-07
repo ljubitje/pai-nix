@@ -1,0 +1,53 @@
+{
+  // Root tsconfig for the LifeOS tree, shipped by lifeos-nix.
+  //
+  // Why it exists: bun executes TypeScript by stripping types, so nothing here is
+  // ever type-checked unless a checker is pointed at it. Before this file, a live
+  // install had 612 .ts files with 84 under any tsconfig, and the first check ever
+  // run found a tool that had been dead at import for weeks.
+  //
+  // It is a REPORT, not a gate. Inherited errors are expected; the number exists so
+  // a later run can be compared against it. Do not wire it into a blocking hook
+  // until the inherited set is cleared, or everyone will learn to bypass it.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": false,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true
+    // "types": ["bun"] is deliberately NOT set yet: bun-types is not vendored, and
+    // naming a missing type package makes tsc fail hard instead of merely reporting.
+    // Add it in the same change that lands bun-types in vendor-locks/root.bun.lock.
+  },
+  // Measured 2026-09-07: the first three globs reached 383 of 584 live .ts files.
+  // PULSE (the daemon), ATLAS and HERMES were the bulk of the gap, so they are in.
+  // Left out on purpose: jobs/ (scratch job artifacts), plugins/ (third-party), and
+  // the skills that carry their own tsconfig (Apify, Telos templates, Observability).
+  "include": [
+    "hooks/**/*.ts",
+    "LIFEOS/TOOLS/**/*.ts",
+    "LIFEOS/PULSE/**/*.ts",
+    "LIFEOS/ATLAS/**/*.ts",
+    "LIFEOS/HERMES/**/*.ts",
+    "skills/**/Tools/**/*.ts",
+    "test/**/*.ts"
+  ],
+  "exclude": [
+    "**/node_modules",
+    ".payload-sync-backup-*",
+    "projects",
+    "LIFEOS/MEMORY",
+    "LIFEOS/PULSE/Observability",
+    "skills/Telos/DashboardTemplate",
+    "skills/Telos/ReportTemplate",
+    "skills/Apify",
+    "jobs",
+    "plugins"
+  ]
+}
