@@ -164,29 +164,35 @@ if (OLD) for (const root of ROOTS) {
 // namesceneega sistema, in nihce tega ne pove. 2026-09-07 je to pomenilo, da so
 // bili trije `skills/Evals/Tools/*` mrtvi ob uvozu, ker `@langwatch/scenario`
 // ni bilo nikjer — payload ga je imel, zivo drevo pa ne. Zato: samo poročilo.
-// Manjkajoce drevo samo po sebi ni okvara: bun in node iscejo navzgor, zato se
-// odvisnost lahko razresi iz prednikovega node_modules. Zato za vsako deklarirano
-// odvisnost preverimo, ali je kje po poti navzgor — sicer poročilo laje po nedolznem.
-function unresolvedDeps(relDir: string): string[] {
-  let declared: string[] = []
+// Manjkajoce drevo samo po sebi ni okvara: bun in node iscejo navzgor, zato se paket
+// lahko razresi iz prednikovega node_modules. Okvara je DEKLARIRANA odvisnost, ki se v
+// zivem drevesu ne razresi od nikoder.
+//
+// Meri se dependencies IN devDependencies. Prav ta drugi je bila luknja (2026-09-07):
+// @types/bun je devDependency, zato ga preverba samo `dependencies` ni videla, in
+// tsconfig bi v zivo dobil `types: ["bun"]` brez tipov — tsc bi padel s TS2688.
+// Tranzitivnih paketov NE merim: platformne izbire (npr. @img/sharp-* z os/cpu/libc)
+// legitimno manjkajo na napacni platformi in bi poletele kot lazni alarm.
+function unresolvedDeclared(relDir: string): string[] {
+  let declared: string[] = [];
   try {
-    const pj = JSON.parse(readFileSync(join(NEW, relDir, "package.json"), "utf8"))
-    declared = Object.keys({ ...(pj.dependencies ?? {}) })
+    const pj = JSON.parse(readFileSync(join(NEW, relDir, "package.json"), "utf8"));
+    declared = Object.keys({ ...(pj.dependencies ?? {}), ...(pj.devDependencies ?? {}) });
   } catch { return [] }
-  const out: string[] = []
+  const out: string[] = [];
   for (const dep of declared) {
-    let dir = relDir, found = false
+    let dir = relDir, found = false;
     for (;;) {
       if (existsSync(join(LIVE, dir, "node_modules", dep))) { found = true; break }
-      if (!dir) break
-      dir = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : ""
+      if (!dir) break;
+      dir = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
     }
-    if (!found) out.push(dep)
+    if (!found) out.push(dep);
   }
-  return out
+  return out;
 }
 
-const depsMissing: Array<{ where: string; payload: number; unresolved: string[] }> = []
+const depsMissing: Array<{ where: string; payload: number; live: number; unresolved: string[] }> = []
 {
   const countEntries = (d: string): number => { try { return readdirSync(d).length } catch { return 0 } }
   const seek = (relDir: string, depth: number): void => {
@@ -199,8 +205,14 @@ const depsMissing: Array<{ where: string; payload: number; unresolved: string[] 
       const rel = relDir ? `${relDir}/${e.name}` : e.name
       if (e.name === "node_modules") {
         const inPayload = countEntries(join(NEW, rel))
-        if (inPayload > 0 && countEntries(join(LIVE, rel)) === 0)
-          depsMissing.push({ where: relDir || ".", payload: inPayload, unresolved: unresolvedDeps(relDir) })
+        if (inPayload > 0) {
+          const unresolved = unresolvedDeclared(relDir)
+          const liveCount = countEntries(join(LIVE, rel))
+          // Javi, kadar se kaj NE razresi (prava okvara), ali kadar zivega drevesa sploh
+          // ni (neenakost, ki jo je vredno videti, tudi ce jo predniki pokrijejo).
+          if (unresolved.length > 0 || liveCount === 0)
+            depsMissing.push({ where: relDir || ".", payload: inPayload, live: liveCount, unresolved })
+        }
         continue   // ne hodi v drevo odvisnosti
       }
       if (e.name === ".git" || e.name === "MEMORY" || e.name === "USER") continue
@@ -248,10 +260,13 @@ if (depsMissing.length) {
   console.log(`\n── ODVISNOSTI (${depsMissing.length}): payload jih nosi, zivo drevo pa jih nima. ──`)
   console.log(`   Ta sync jih NE prenasa (node_modules so v SKIP); postavi jih install ali roka.`)
   for (const d of depsMissing) {
+    const shown = d.unresolved.slice(0, 8).join(", ") + (d.unresolved.length > 8 ? `, … (+${d.unresolved.length - 8})` : "")
     const verdict = d.unresolved.length
-      ? `‼️ MRTVO ob uvozu — ni razresljivo niti navzgor: ${d.unresolved.join(", ")}`
-      : `ok — vse deklarirane odvisnosti se razresijo iz prednikovega drevesa`
-    console.log(`   ${d.where}  (${d.payload} v payloadu, 0 zivih)\n       ${verdict}`)
+      ? `‼️ MRTVO ob uvozu — ${d.unresolved.length} deklarirana(ih) odvisnosti se ne razresi niti navzgor: ${shown}`
+      : `ok — drevesa v zivem ni, a vse deklarirane odvisnosti se razresijo iz prednika`
+    // Prava stevilka, ne trda: "0 zivih" je bilo resnicno le, dokler se je porocilo
+    // sprozilo izkljucno ob praznem drevesu — po razsiritvi merila je zacelo lagati.
+    console.log(`   ${d.where}  (${d.payload} v payloadu, ${d.live} zivih)\n       ${verdict}`)
   }
   if (broken.length) console.log(`   ⇒ ${broken.length} mesto(a) je zares mrtvo; ostalo je le neenakost, ne okvara.`)
 }
