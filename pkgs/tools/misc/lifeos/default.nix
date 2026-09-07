@@ -59,8 +59,8 @@ let
   };
   deps = {
     root      = vendorTree { name = "root";      subdir = ".";                          hash = "sha256-hcC4I2yK4fcXn65bFjTM297goQDJh4uyO6dLBHwDPx0="; lockFile = ./vendor-locks/root.bun.lock; patches = [ ./patches/f-root-bun-types.patch ]; };
-    tools     = vendorTree { name = "tools";     subdir = "LIFEOS/TOOLS";               hash = "sha256-FIBTFDHuFW6WyDSlNXr6QMi76eaFLaxKZgKwNMay5/E="; lockFile = ./vendor-locks/tools.bun.lock; };
-    pulse     = vendorTree { name = "pulse";     subdir = "LIFEOS/PULSE";               hash = "sha256-2zjzLOg6UPkQa86IMj+OPiB69IQOHZhuhtuZPanKU+o="; };
+    tools     = vendorTree { name = "tools";     subdir = "LIFEOS/TOOLS";               hash = "sha256-bvIBhAQrcnkZI7qyvheZ91kZCjox8qine/CMqOYbL30="; lockFile = ./vendor-locks/tools.bun.lock; };
+    pulse     = vendorTree { name = "pulse";     subdir = "LIFEOS/PULSE";               hash = "sha256-J36HjqO9TjaLe3+M2VyGQIq1cOua20cXqDegGQQBQAU="; };
     obs       = vendorTree { name = "obs";       subdir = "LIFEOS/PULSE/Observability"; hash = "sha256-dzvmq20UIVDwc9Ui0nrPzckwIH9zT5pADgYaeTI/aRk="; };
     tokenxray = vendorTree { name = "tokenxray"; subdir = "LIFEOS/TOOLS/TokenXray";      hash = "sha256-VZFZ8RyMavdtBaUnkswSlv2tBcPEteCO5EOqb60HJlI="; lockFile = ./vendor-locks/tokenxray.bun.lock; };
     # Skill-tool trees whose .ts run IN-PLACE (direct package imports) — vendored so they work under Nix.
