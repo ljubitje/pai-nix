@@ -18,10 +18,12 @@
           # and the first check ever run surfaced an already-dead tool.
           pkgs.typescript
 
-          # `fabric -y <url>` is the documented transcript path for six skills (Research
-          # names it Tier-1 for YouTube even when YOUTUBE_API_KEY is set, plus ExtractWisdom,
-          # Fabric, Aphorisms, Prompting, and LIFEOS/TOOLS/GetTranscript.ts, which execFileSyncs
-          # the bare name). Upstream ships the pattern DATA but never the binary, so on this
+          # `fabric -y <url>` is the documented transcript path across six skills in sixteen
+          # files (Research, which names it Tier-1 for YouTube even when YOUTUBE_API_KEY is
+          # set, plus ExtractWisdom, Fabric, Aphorisms, Prompting and Remotion), and in one
+          # tool, LIFEOS/TOOLS/GetTranscript.ts, which execFileSyncs the bare name. Counted
+          # 2026-09-10, after a first pass of this comment missed Remotion and filed the tool
+          # as a skill. Upstream ships the pattern DATA but never the binary, so on this
           # install every one of those paths died at ENOENT and the fallback was scraping the
           # YouTube page — which the Fabric skill explicitly forbids. Measured 2026-09-10:
           # `which fabric` empty, no store path, transcript unobtainable for a plain video.
@@ -30,7 +32,7 @@
           # site uses. No API key is needed for the `-y`/`-u` legs, which read captions and
           # never call an LLM, but the config FILE still has to exist; the tmpfiles rule
           # below creates it, and that block explains why.
-          self.packages.${pkgs.stdenv.hostPlatform.system}.fabric-ai
+          pkgs.fabric-ai
           # yt-dlp is the keyless floor under the same need: `--write-auto-subs --skip-download`
           # pulls captions without touching the media, so subtitle extraction survives fabric
           # breaking on a YouTube player change (its usual failure mode) and covers the sites
@@ -52,11 +54,25 @@
         # user who already has keys in there keeps them across every rebuild. 0600
         # because upstream's own use of this file is API keys.
         #
-        # Scope: this covers the missing-config error only. The second defect measured the
-        # same day — with stdin left open, fabric drains fd 0 to EOF before anything else
-        # and blocks forever, zero bytes on both streams, with or without .env — is a
-        # separate fix, in the binary: see pkgs/tools/misc/fabric-ai/. Two defects, two
-        # mechanisms, and neither one hides the other.
+        # Scope: the missing-config error only. A SECOND, UNFIXED defect was measured the
+        # same day and is left standing deliberately, so it is recorded here rather than
+        # rediscovered: with stdin left open, fabric drains fd 0 to EOF before doing
+        # anything and blocks forever, zero bytes on stdout AND stderr, with or without
+        # .env. A tty is a character device, so an interactive user never sees it; every
+        # programmatic caller does. Workaround at any call site: give it `< /dev/null`.
+        #
+        # A patch narrowing that read to "no explicit -y/-u/-q source given" was written,
+        # built, and REVERTED on evidence, because piping content alongside a source flag
+        # is a real fabric capability and the patch ate it silently. Measured on 1.4.459,
+        # `printf 'MARKER' | fabric -y URL --dry-run`:
+        #   unpatched -> exit 0, MARKER present, 14516 bytes, goes through the model
+        #   patched   -> exit 0, MARKER gone,    14282 bytes, model never called
+        # With Message left empty, IsChatRequest() flips false and fabric prints the raw
+        # text and exits 0. That is the same class of silent failure the patch set out to
+        # remove, so it was the wrong trade. A correct fix bounds the WAIT rather than
+        # skipping the read (poll fd 0 with a deadline), and needs a timing constant chosen
+        # in upstream's terms, not ours; Klemen's cut 2026-09-10 was to drop it and keep
+        # this note.
         systemd.user.tmpfiles.rules = [ "f %h/.config/fabric/.env 0600 - - -" ];
 
         # Pulse runs as a per-user systemd service. Upstream's manage.sh generates
@@ -98,16 +114,12 @@
         # SoT: lifeos-nix owns the claude-code version pin (vendored derivation +
         # manifest.json), not raw nixpkgs. Bump: ./pkgs/tools/misc/claude-code/update.sh <version>.
         claude-code = pkgs.callPackage ./pkgs/tools/misc/claude-code { };
-        # fabric with the stdin-precedence patch; see that dir's default.nix for why
-        # this is fixed in the binary and not at each call site.
-        fabric-ai = pkgs.callPackage ./pkgs/tools/misc/fabric-ai { };
         lifeos = pkgs.callPackage ./pkgs/tools/misc/lifeos {
           inherit claude-code;
         };
       in
       {
         packages.claude-code = claude-code;
-        packages.fabric-ai = fabric-ai;
         packages.lifeos = lifeos;
         packages.default = lifeos;
         # Convenience: `nix develop` drops you into a shell with bun + git ready.
