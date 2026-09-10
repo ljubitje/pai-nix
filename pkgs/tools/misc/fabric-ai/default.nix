@@ -19,6 +19,6 @@
 
 fabric-ai.overrideAttrs (old: {
   patches = (old.patches or [ ]) ++ [
-    ./0001-explicit-input-source-beats-inherited-stdin.patch
+    ./f-fabric-stdin-precedence.patch
   ];
 })
