@@ -27,8 +27,9 @@
           # `which fabric` empty, no store path, transcript unobtainable for a plain video.
           # The attr is `fabric-ai` (Go, same author as LifeOS upstream); `pkgs.fabric` does
           # not exist in this pin, and mainProgram is `fabric`, which is the name every call
-          # site uses. Config-free for `-y`/`-u`: those legs read captions and never call an
-          # LLM, so no API key and no egress beyond the fetch itself.
+          # site uses. No API key is needed for the `-y`/`-u` legs, which read captions and
+          # never call an LLM, but the config FILE still has to exist; the tmpfiles rule
+          # below creates it, and that block explains why.
           self.packages.${pkgs.stdenv.hostPlatform.system}.fabric-ai
           # yt-dlp is the keyless floor under the same need: `--write-auto-subs --skip-download`
           # pulls captions without touching the media, so subtitle extraction survives fabric
@@ -51,11 +52,11 @@
         # user who already has keys in there keeps them across every rebuild. 0600
         # because upstream's own use of this file is API keys.
         #
-        # This fixes the missing-config error and NOT the other defect measured the same
-        # day: with stdin left open (a pipe, as any non-interactive caller gives it)
-        # fabric drains fd 0 to EOF before anything else and blocks there forever, zero
-        # bytes on both stdout and stderr, with or without .env. Callers must close
-        # stdin; that belongs to the caller, so no patch here pretends to cover it.
+        # Scope: this covers the missing-config error only. The second defect measured the
+        # same day — with stdin left open, fabric drains fd 0 to EOF before anything else
+        # and blocks forever, zero bytes on both streams, with or without .env — is a
+        # separate fix, in the binary: see pkgs/tools/misc/fabric-ai/. Two defects, two
+        # mechanisms, and neither one hides the other.
         systemd.user.tmpfiles.rules = [ "f %h/.config/fabric/.env 0600 - - -" ];
 
         # Pulse runs as a per-user systemd service. Upstream's manage.sh generates
