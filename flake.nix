@@ -17,6 +17,19 @@
           # Found 2026-09-06: on a live install 612 .ts files, 84 under any tsconfig,
           # and the first check ever run surfaced an already-dead tool.
           pkgs.typescript
+
+          # `fabric -y <url>` is the documented transcript path for six skills (Research
+          # names it Tier-1 for YouTube even when YOUTUBE_API_KEY is set, plus ExtractWisdom,
+          # Fabric, Aphorisms, Prompting, and LIFEOS/TOOLS/GetTranscript.ts, which execFileSyncs
+          # the bare name). Upstream ships the pattern DATA but never the binary, so on this
+          # install every one of those paths died at ENOENT and the fallback was scraping the
+          # YouTube page — which the Fabric skill explicitly forbids. Measured 2026-09-10:
+          # `which fabric` empty, no store path, transcript unobtainable for a plain video.
+          # The attr is `fabric-ai` (Go, same author as LifeOS upstream); `pkgs.fabric` does
+          # not exist in this pin, and mainProgram is `fabric`, which is the name every call
+          # site uses. Config-free for `-y`/`-u`: those legs read captions and never call an
+          # LLM, so no API key and no egress beyond the fetch itself.
+          pkgs.fabric-ai
         ];
 
         # Pulse runs as a per-user systemd service. Upstream's manage.sh generates
