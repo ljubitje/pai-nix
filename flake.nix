@@ -38,6 +38,26 @@
           pkgs.yt-dlp
         ];
 
+        # fabric refuses to run without ~/.config/fabric/.env, INCLUDING the `-y`
+        # transcript leg, which reads captions and needs no credential at all. Measured
+        # 2026-09-10 on 1.4.459: absent file + stdin at /dev/null exits 1 with
+        # "error loading .env file"; an empty file makes the same call exit 0 with a
+        # 14 KB transcript. So the floor for a fresh install is the file existing, not
+        # any key being in it, and nothing in LifeOS's own setup creates it.
+        #
+        # tmpfiles `f` (not `f+`) creates only when absent and leaves an existing file
+        # untouched — calibrated both ways rather than trusted: `f` over a 15-byte .env
+        # left all 15 bytes, and over a deleted one produced an empty 0600 file. So a
+        # user who already has keys in there keeps them across every rebuild. 0600
+        # because upstream's own use of this file is API keys.
+        #
+        # This fixes the missing-config error and NOT the other defect measured the same
+        # day: with stdin left open (a pipe, as any non-interactive caller gives it)
+        # fabric drains fd 0 to EOF before anything else and blocks there forever, zero
+        # bytes on both stdout and stderr, with or without .env. Callers must close
+        # stdin; that belongs to the caller, so no patch here pretends to cover it.
+        systemd.user.tmpfiles.rules = [ "f %h/.config/fabric/.env 0600 - - -" ];
+
         # Pulse runs as a per-user systemd service. Upstream's manage.sh generates
         # a ~/.config/systemd/user unit at install time with a macOS/Ubuntu PATH
         # (__HOME__/.bun/bin:/usr/local/bin:/usr/bin:/bin) that has NO bash/bun on
