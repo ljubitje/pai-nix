@@ -29,7 +29,7 @@
           # not exist in this pin, and mainProgram is `fabric`, which is the name every call
           # site uses. Config-free for `-y`/`-u`: those legs read captions and never call an
           # LLM, so no API key and no egress beyond the fetch itself.
-          pkgs.fabric-ai
+          self.packages.${pkgs.stdenv.hostPlatform.system}.fabric-ai
           # yt-dlp is the keyless floor under the same need: `--write-auto-subs --skip-download`
           # pulls captions without touching the media, so subtitle extraction survives fabric
           # breaking on a YouTube player change (its usual failure mode) and covers the sites
@@ -97,12 +97,16 @@
         # SoT: lifeos-nix owns the claude-code version pin (vendored derivation +
         # manifest.json), not raw nixpkgs. Bump: ./pkgs/tools/misc/claude-code/update.sh <version>.
         claude-code = pkgs.callPackage ./pkgs/tools/misc/claude-code { };
+        # fabric with the stdin-precedence patch; see that dir's default.nix for why
+        # this is fixed in the binary and not at each call site.
+        fabric-ai = pkgs.callPackage ./pkgs/tools/misc/fabric-ai { };
         lifeos = pkgs.callPackage ./pkgs/tools/misc/lifeos {
           inherit claude-code;
         };
       in
       {
         packages.claude-code = claude-code;
+        packages.fabric-ai = fabric-ai;
         packages.lifeos = lifeos;
         packages.default = lifeos;
         # Convenience: `nix develop` drops you into a shell with bun + git ready.
