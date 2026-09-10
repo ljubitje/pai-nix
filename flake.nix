@@ -30,6 +30,12 @@
           # site uses. Config-free for `-y`/`-u`: those legs read captions and never call an
           # LLM, so no API key and no egress beyond the fetch itself.
           pkgs.fabric-ai
+          # yt-dlp is the keyless floor under the same need: `--write-auto-subs --skip-download`
+          # pulls captions without touching the media, so subtitle extraction survives fabric
+          # breaking on a YouTube player change (its usual failure mode) and covers the sites
+          # fabric has no extractor for. Also the only path to AudioEditor/Tools/Transcribe.ts
+          # (Whisper) for a video with no published captions, which needs the audio on disk.
+          pkgs.yt-dlp
         ];
 
         # Pulse runs as a per-user systemd service. Upstream's manage.sh generates
