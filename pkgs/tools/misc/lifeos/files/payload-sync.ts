@@ -20,7 +20,7 @@
  *   bun payload-sync.ts --new <B-install-dir> [--old <A-install-dir>] [--live <~/.claude>] [--roots <a,b,c>|privzeto iz manifesta] [--apply]
  */
 import { createHash } from "node:crypto"
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, copyFileSync, rmSync, chmodSync, statSync } from "node:fs"
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, copyFileSync, rmSync, chmodSync, statSync, renameSync } from "node:fs"
 import { join, relative, dirname } from "node:path"
 
 function arg(flag: string, def?: string): string | undefined {
@@ -47,6 +47,13 @@ const SKIP = /(^|\/)(USER|MEMORY|node_modules|\.git)(\/|$)|\/Observability\/out\
 //   CLAUDE.template.md         — predloga za CLAUDE.md; naš je pisan na roko
 //   settings.enhancements.json — samo spinnerVerbs/spinnerTipsOverride; oba že v settings.user.json
 const DELIBERATELY_ABSENT = new Set(["install.sh", "CLAUDE.template.md", "settings.enhancements.json"])
+
+// Launcher-owned control state: $CFG/LIFEOS/VERSION is the launcher's success MARKER. It is ALSO a
+// payload file (in the manifest), but payload-sync must NEVER classify or write it — the launcher
+// advances it, gated on THIS tool's exit 0. If the sync wrote VERSION it would advance the marker
+// mid-apply (before the gate → retry defeated) and land it read-only 444 (→ launcher `printf > MARKER`
+// EACCES → LifeOS unlaunchable). A control marker and a synced file must not share an inode. (review 2026-09-23)
+const LAUNCHER_OWNED = new Set(["LIFEOS/VERSION"])
 
 const sha = (p: string): string | null => {
   try { return createHash("sha256").update(readFileSync(p)).digest("hex") } catch { return null }
@@ -102,6 +109,7 @@ const absent: string[] = []   // uradno, a namenoma brez — poroča se, ne skri
 
 function classify(rel: string): void {
   if (SKIP.test("/" + rel)) return
+  if (LAUNCHER_OWNED.has(rel)) return   // launcher-owned marker: never synced (see LAUNCHER_OWNED note)
   if (DELIBERATELY_ABSENT.has(rel)) { absent.push(rel); return }
   const nf = join(NEW, rel)
   if (!existsSync(nf)) return
@@ -295,22 +303,46 @@ function backup(rel: string) {
 // before overwriting (mirrors the launcher's `chmod -R u+w $CFG`), preserving other mode bits.
 const ensureWritable = (p: string) => { if (existsSync(p)) chmodSync(p, statSync(p).mode | 0o200) }
 
+// Atomic per-file replace: copy → tmp in the SAME dir, then rename (atomic on one fs). A kill
+// mid-write leaves either the old or the new whole file, never a half-written one; and rename
+// needs a writable DIR, not a writable dest (so the store's 444 mode can't EACCES the swap).
+function writeAtomic(srcAbs: string, dstAbs: string) {
+  mkdirSync(dirname(dstAbs), { recursive: true })
+  const tmp = dstAbs + ".payload-sync.tmp"
+  copyFileSync(srcAbs, tmp)
+  chmodSync(tmp, statSync(tmp).mode | 0o200)   // store src is 444; land the live file owner-writable
+  renameSync(tmp, dstAbs)                       // (install_core's `chmod -R u+w $CFG` invariant, else config edits EACCES)
+}
+
+// Exit-code contract (council): 0 = every classified file reached its terminal state (TAKE_B
+// applied+verified, ADD written, DELETE removed; REVIEW-skip is EXPECTED success, not an error);
+// non-zero = a real error / partial write mid-apply → launcher leaves MARKER stale → retry.
 let took = 0, added = 0, deleted = 0
-for (const rel of buckets.TAKE_B) { backup(rel); const d = join(LIVE, rel); ensureWritable(d); copyFileSync(join(NEW, rel), d); took++ }
-for (const rel of buckets.ADD)   { const d = join(LIVE, rel); mkdirSync(dirname(d), { recursive: true }); copyFileSync(join(NEW, rel), d); added++ }
-for (const rel of buckets.DELETE){ backup(rel); rmSync(join(LIVE, rel)); deleted++ }
+try {
+  for (const rel of buckets.TAKE_B) { backup(rel); ensureWritable(join(LIVE, rel)); writeAtomic(join(NEW, rel), join(LIVE, rel)); took++ }
+  for (const rel of buckets.ADD)   { writeAtomic(join(NEW, rel), join(LIVE, rel)); added++ }
+  for (const rel of buckets.DELETE){ backup(rel); rmSync(join(LIVE, rel)); deleted++ }
+} catch (e) {
+  console.error(`\n‼️ payload-sync APPLY FAILED (partial) — MARKER se NE dvigne, retry ob naslednjem zagonu:\n   ${e instanceof Error ? e.message : String(e)}`)
+  process.exit(1)
+}
 // REVIEW + CURRENT: NIKOLI ne piše.
 
 // Persist the accumulated known-official set (monotonic across releases): this release's
 // MANIFEST is now folded in, so future runs recognize these hashes as official. Only on
 // --apply (dry-run stays read-only). Sorted by path for a stable, diffable file.
+// Best-effort (like the REVIEW surface): the apply already SUCCEEDED above, so a failure to persist
+// the accumulator must NOT flip the exit code — else the launcher leaves MARKER stale and re-syncs
+// every launch forever (applied files read CURRENT, but MARKER never advances). Warn, don't throw.
 let persistedKnown = 0
 if (manifestFound) {
-  const lines: string[] = []
-  for (const [p, hs] of known) for (const h of hs) { lines.push(`${h}  ${p}`); persistedKnown++ }
-  lines.sort((a, b) => (a.slice(66) < b.slice(66) ? -1 : a.slice(66) > b.slice(66) ? 1 : 0))
-  mkdirSync(dirname(KNOWN), { recursive: true })
-  writeFileSync(KNOWN, lines.join("\n") + "\n")
+  try {
+    const lines: string[] = []
+    for (const [p, hs] of known) for (const h of hs) { lines.push(`${h}  ${p}`); persistedKnown++ }
+    lines.sort((a, b) => (a.slice(66) < b.slice(66) ? -1 : a.slice(66) > b.slice(66) ? 1 : 0))
+    mkdirSync(dirname(KNOWN), { recursive: true })
+    writeFileSync(KNOWN, lines.join("\n") + "\n")
+  } catch (e) { console.error(`  ⚠ known-official persist spodletel (ne blokira): ${e instanceof Error ? e.message : String(e)}`) }
 }
 
 console.log(`\n════ APPLY izveden ════`)
@@ -320,3 +352,18 @@ console.log(`  DELETE izbrisanih:  ${deleted}`)
 console.log(`  known-official:     ${persistedKnown} hashev ${manifestFound ? "→ " + KNOWN : "(brez manifesta — ni posodobljen)"}`)
 console.log(`  REVIEW NEDOTAKNJEN: ${buckets.REVIEW.length} (skill/human)`)
 console.log(`  backup:             ${BACKUP}\n`)
+
+// Iris (state-semantics): after this, MARKER will mean "official set synced", NOT "every bit ==
+// payload" (ours-modified REVIEW files are deliberately excluded). So surface REVIEW DURABLY —
+// a queryable artifact, not just an stderr log — else unresolved ours-files become silent drift
+// (Klemnov "beri izdelek, ne recept"). A consumer (Pulse/Doctor) can read this and nag.
+try {
+  const want = (() => { try { return readFileSync(join(NEW, "LIFEOS", "VERSION"), "utf8").trim() } catch { return null } })()
+  const reviewOut = join(LIVE, "LIFEOS", "MEMORY", "STATE", "payload-sync-review.json")
+  mkdirSync(dirname(reviewOut), { recursive: true })
+  writeFileSync(reviewOut, JSON.stringify(
+    { ts: new Date().toISOString(), want, applied: { took, added, deleted },
+      reviewCount: buckets.REVIEW.length, review: buckets.REVIEW, stale: buckets.STALE }, null, 2) + "\n")
+} catch (e) { console.error(`  ⚠ REVIEW-surface zapis spodletel: ${e instanceof Error ? e.message : String(e)}`) }
+
+process.exit(0)   // clean — REVIEW-skip counts as success ⇒ launcher may bump MARKER

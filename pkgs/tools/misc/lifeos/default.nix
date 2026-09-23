@@ -14,7 +14,7 @@
   claude-code,
 }:
 let
-  version = "7.40.4.10"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .10 = fabric + yt-dlp shipped and the transcript path made to actually work (module systemPackages, a tmpfiles-created ~/.config/fabric/.env because fabric refuses to start without the file even for the credential-free -y leg, with fabric's stdin-blocking defect left unfixed and documented in flake.nix after a patch for it was reverted on evidence; tests/fabric-test.sh guards what shipped); .9 = f-root-bun-types + per-call `patches` on vendorTree (ambient Bun types vendored into the root tree so `Bun` resolves from the tree, not by accident out of one skill's node_modules); .8 = typecheck-layer (root tsconfig.json shipped into the payload so the ~600 .ts files bun runs by stripping types are checkable at all; report-only, no gate; measured 500/584 files covered, 63 real errors); .7 = f-private-zones (private zones counted never quoted: USER register + library for probes + Read/Grep/Glob lane; Bash out of scope; no upstream file modified); .6 = payload-sync obseg iz manifesta (root fajli primerjani, namerne odsotnosti poročane); .5 = f-verification-rule8 (falsifier fidelity = rule 8; a probe whose expected side derives from the code under test cannot fail — only mutation proves it can); .4 = f-incidents-retire (INCIDENTS narrative surface retired — declared, never populated, and redundant with FAILURES/ + RecurrenceLedger; Klemen 2026-09-01); .3 = f4-e AtlasEventCapture hook unregistered (Atlas off in one piece); .2 = f4-d Atlas no-graph-egress (Inference hard-kill in PULSE/modules/atlas.ts + atlas/atlas_insights off until inference is local); .1 = claude-code 2.1.251 pinned as SoT (vendored derivation + Pulse unit path + update.sh fix); .0 = fresh upstream base (7.1.1.1 → 7.40.4 migration, patches re-triaged: 19→13, 6 DISSOLVE dropped)
+  version = "7.40.4.11"; # <upstream LifeOS version>.<lifeos-nix packaging patch level>; .11 = payload-sync auto-run: launcher syncs store→live on version change (council-designed success-gate — MARKER advances only on sync exit 0, else stale-MARKER retries next launch; flock, 30s budget, LIFEOS_SKIP_SYNC=1 hatch, exec always fires) + payload-sync atomic tmp-rename writes, explicit exit-code contract, durable REVIEW surface (MEMORY/STATE/payload-sync-review.json — Iris: MARKER now means "official set synced", not "all bits == payload"); .10 = fabric + yt-dlp shipped and the transcript path made to actually work (module systemPackages, a tmpfiles-created ~/.config/fabric/.env because fabric refuses to start without the file even for the credential-free -y leg, with fabric's stdin-blocking defect left unfixed and documented in flake.nix after a patch for it was reverted on evidence; tests/fabric-test.sh guards what shipped); .9 = f-root-bun-types + per-call `patches` on vendorTree (ambient Bun types vendored into the root tree so `Bun` resolves from the tree, not by accident out of one skill's node_modules); .8 = typecheck-layer (root tsconfig.json shipped into the payload so the ~600 .ts files bun runs by stripping types are checkable at all; report-only, no gate; measured 500/584 files covered, 63 real errors); .7 = f-private-zones (private zones counted never quoted: USER register + library for probes + Read/Grep/Glob lane; Bash out of scope; no upstream file modified); .6 = payload-sync obseg iz manifesta (root fajli primerjani, namerne odsotnosti poročane); .5 = f-verification-rule8 (falsifier fidelity = rule 8; a probe whose expected side derives from the code under test cannot fail — only mutation proves it can); .4 = f-incidents-retire (INCIDENTS narrative surface retired — declared, never populated, and redundant with FAILURES/ + RecurrenceLedger; Klemen 2026-09-01); .3 = f4-e AtlasEventCapture hook unregistered (Atlas off in one piece); .2 = f4-d Atlas no-graph-egress (Inference hard-kill in PULSE/modules/atlas.ts + atlas/atlas_insights off until inference is local); .1 = claude-code 2.1.251 pinned as SoT (vendored derivation + Pulse unit path + update.sh fix); .0 = fresh upstream base (7.1.1.1 → 7.40.4 migration, patches re-triaged: 19→13, 6 DISSOLVE dropped)
   src = fetchFromGitHub {
     owner = "danielmiessler";
     repo = "LifeOS";
@@ -267,9 +267,28 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     if [ ! -f "$MARKER" ]; then
       install_core
     elif [ "$(cat "$MARKER" 2>/dev/null || true)" != "$WANT" ]; then
-      echo "lifeos: package updated ($(cat "$MARKER") -> $WANT). Upstream migration plan:"
-      timeout 30 bun "$CFG/LIFEOS/TOOLS/LifeosUpgrade.ts" --dry-run 2>/dev/null || true
-      echo "  (apply wired at the next upstream bump — see ISA F-upgrade.)"
+      echo "lifeos: package updated ($(cat "$MARKER") -> $WANT)."
+      # Auto-sync store→live (payload-sync): overwrite official-stale files (backup+verify+atomic),
+      # never touch ours (REVIEW → surfaced durably). Council-designed success-gate: MARKER advances
+      # to WANT ONLY on sync exit 0; a failed/timed-out/skipped sync leaves MARKER stale so the NEXT
+      # launch retries (no bash retry loop — stale MARKER IS the retry). flock so two launches don't
+      # race; 30s wall-clock budget; LIFEOS_SKIP_SYNC=1 escape hatch. The `exec` below ALWAYS fires —
+      # a broken sync must never make LifeOS unlaunchable (degraded > dead).
+      if [ "''${LIFEOS_SKIP_SYNC:-}" = "1" ]; then
+        echo "  LIFEOS_SKIP_SYNC=1 — auto-sync skipped; MARKER left stale (retries next launch)." >&2
+      elif ( flock -n 9 || exit 99
+             timeout 30 bun "$SKILL/install/LIFEOS/TOOLS/payload-sync.ts" --new "$SKILL/install" --live "$CFG" --apply
+           ) 9>"$CFG/LIFEOS/.payload-sync.lock"; then
+        # Guarded: a MARKER-write failure (read-only/full disk) must NOT abort the wrapper under
+        # set -e before the exec below — leave MARKER stale (retries next launch) and launch anyway.
+        { printf '%s' "$WANT" > "$MARKER" && echo "  sync ok → MARKER advanced to $WANT"; } \
+          || echo "  sync ok but MARKER write failed — MARKER left stale; retries next launch." >&2
+      else
+        rc=$?
+        [ "$rc" = 99 ] && echo "  another launch holds the sync lock — skipped; it will advance MARKER." >&2 \
+                       || echo "  sync incomplete (rc=$rc) — MARKER left stale; retries next launch." >&2
+      fi
+      timeout 20 bun "$CFG/LIFEOS/TOOLS/LifeosUpgrade.ts" --dry-run 2>/dev/null || true
     fi
 
     exec bun "$CFG/LIFEOS/TOOLS/lifeos.ts" -s "$CFG/LIFEOS/LIFEOS_SYSTEM_PROMPT.md" "$@"
