@@ -209,6 +209,14 @@ stdenvNoCC.mkDerivation (finalAttrs: {
         ! -name MANIFEST.sha256 \
         -printf '%P\n' | LC_ALL=C sort | xargs sha256sum > MANIFEST.sha256 )
 
+    # 3d) Packaging-version marker = the SYNC trigger, DISTINCT from LIFEOS/VERSION (the UPSTREAM
+    # version freeze-guard/upgrade tooling read). The whole point of payload-sync is delivering
+    # packaging fixes (.N bumps) that do NOT move upstream VERSION — so the launcher gates auto-sync
+    # on THIS file, not VERSION. Written AFTER the manifest ⇒ not fingerprinted; launcher-owned,
+    # never synced (payload-sync excludes it via LAUNCHER_OWNED). `echo -n` matches the launcher's
+    # newline-free `printf '%s'` write so cat-compares are exact.
+    echo -n "${version}" > $out/share/lifeos/LifeOS/install/LIFEOS/.pkg-version
+
     # 4) The `lifeos` launcher on PATH (no rc mutation, no alias).
     install -dm755 $out/bin
     cat > $out/bin/lifeos << 'WRAP'
@@ -220,6 +228,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     CFG="''${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
     WANT="$(cat "$SKILL/install/LIFEOS/VERSION")"
     MARKER="$CFG/LIFEOS/VERSION"
+    # Sync trigger = packaging version (moves on every .N fix), NOT upstream VERSION (rarely moves).
+    PKG_WANT="$(cat "$SKILL/install/LIFEOS/.pkg-version" 2>/dev/null || echo "$WANT")"
+    PKG_MARKER="$CFG/LIFEOS/.pkg-version"
 
     # FREEZE-GUARD: refuse a pre-7.x PAI/LifeOS tree (structurally protects a 5.0.0 dev box).
     if [ -e "$CFG/.pai-version" ] || [ -d "$CFG/PAI" ]; then
@@ -266,8 +277,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
     if [ ! -f "$MARKER" ]; then
       install_core
-    elif [ "$(cat "$MARKER" 2>/dev/null || true)" != "$WANT" ]; then
-      echo "lifeos: package updated ($(cat "$MARKER") -> $WANT)."
+    elif [ "$(cat "$PKG_MARKER" 2>/dev/null || echo none)" != "$PKG_WANT" ]; then
+      echo "lifeos: package updated ($(cat "$PKG_MARKER" 2>/dev/null || echo none) -> $PKG_WANT)."
       # Auto-sync store→live (payload-sync): overwrite official-stale files (backup+verify+atomic),
       # never touch ours (REVIEW → surfaced durably). Council-designed success-gate: MARKER advances
       # to WANT ONLY on sync exit 0; a failed/timed-out/skipped sync leaves MARKER stale so the NEXT
@@ -281,8 +292,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
            ) 9>"$CFG/LIFEOS/.payload-sync.lock"; then
         # Guarded: a MARKER-write failure (read-only/full disk) must NOT abort the wrapper under
         # set -e before the exec below — leave MARKER stale (retries next launch) and launch anyway.
-        { printf '%s' "$WANT" > "$MARKER" && echo "  sync ok → MARKER advanced to $WANT"; } \
-          || echo "  sync ok but MARKER write failed — MARKER left stale; retries next launch." >&2
+        { printf '%s' "$PKG_WANT" > "$PKG_MARKER" && echo "  sync ok → pkg-marker advanced to $PKG_WANT"; } \
+          || echo "  sync ok but pkg-marker write failed — left stale; retries next launch." >&2
       else
         rc=$?
         [ "$rc" = 99 ] && echo "  another launch holds the sync lock — skipped; it will advance MARKER." >&2 \

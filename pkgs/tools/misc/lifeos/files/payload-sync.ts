@@ -53,7 +53,7 @@ const DELIBERATELY_ABSENT = new Set(["install.sh", "CLAUDE.template.md", "settin
 // advances it, gated on THIS tool's exit 0. If the sync wrote VERSION it would advance the marker
 // mid-apply (before the gate → retry defeated) and land it read-only 444 (→ launcher `printf > MARKER`
 // EACCES → LifeOS unlaunchable). A control marker and a synced file must not share an inode. (review 2026-09-23)
-const LAUNCHER_OWNED = new Set(["LIFEOS/VERSION"])
+const LAUNCHER_OWNED = new Set(["LIFEOS/VERSION", "LIFEOS/.pkg-version"])
 
 const sha = (p: string): string | null => {
   try { return createHash("sha256").update(readFileSync(p)).digest("hex") } catch { return null }
