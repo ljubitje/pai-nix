@@ -1,0 +1,61 @@
+lifeos-nix patch f-siri-retire — do not load the Siri voice-turn endpoint
+
+PROBLEM
+  Pulse loads modules/siri.ts unconditionally ("always load; fails closed without
+  SIRI_API_KEY") and routes POST /api/siri/turn to it — a tunnel-exposed door that sat
+  dormant. It drives claude through the Agent SDK, which runs the SDK's own bundled binary
+  and so bypasses the lifeos-nix claude wrapper and its [inference] gate (code review
+  2026-10-04): a local-only install could still reach Anthropic through it.
+
+FIX
+  Remove the dynamic import and the /api/siri route from pulse.ts (Klemen, 2026-10-04:
+  retire it like iMessage). modules/siri.ts stays on disk, unreferenced.
+
+SCOPE / CO-EXISTENCE
+  One file (pulse.ts), two hunks; disjoint from f-derived-watch-wire (loadModules tail) and
+  0029 (shutdown handler).
+
+VERIFICATION
+  `rg siriModule pulse.ts` → no match; pulse.ts transpiles (bun build --no-bundle).
+
+diff --git a/LifeOS/install/LIFEOS/PULSE/pulse.ts b/LifeOS/install/LIFEOS/PULSE/pulse.ts
+index 094116a..f7fb473 100755
+--- a/LifeOS/install/LIFEOS/PULSE/pulse.ts
++++ b/LifeOS/install/LIFEOS/PULSE/pulse.ts
+@@ -77,7 +77,6 @@ import { homedir } from "node:os";
+ let voiceModule: any = null
+ let observabilityModule: any = null
+ let wikiModule: any = null
+-let siriModule: any = null
+ let imessageModule: any = null
+ let assistantModule: any = null
+ let performanceModule: any = null
+@@ -141,12 +140,9 @@ async function loadModules(config: PulseConfig) {
+       log("warn", "iMessage module not available", { error: String(err) })
+     }
+   }
+-  // Siri voice-turn endpoint — always load; fails closed without SIRI_API_KEY
+-  try {
+-    siriModule = await import("./modules/siri")
+-  } catch (err) {
+-    log("warn", "Siri module not available", { error: String(err) })
+-  }
++  // lifeos-nix (f-siri-retire): the Siri voice-turn endpoint is not loaded. It was always-on
++  // and tunnel-exposed, and it drives claude through the Agent SDK's own binary, which
++  // bypasses the claude wrapper (and with it the [inference] gate). Retired like iMessage.
+   // Assistant (DA subsystem) is a private module stripped from the public
+   // release payload. Existence-check before importing so a fresh public install
+   // boots cleanly and simply omits the /assistant routes. #1419.
+@@ -864,12 +860,6 @@ async function main() {
+         if (resp) return resp
+       }
+ 
+-      // Siri voice-turn route: POST /api/siri/turn (bearer-authed, tunnel-exposed)
+-      if (siriModule && pathname.startsWith("/api/siri")) {
+-        const resp = await siriModule.handleSiriRequest(req, pathname)
+-        if (resp) return resp
+-      }
+-
+       // Wiki routes: /api/wiki/*
+       if (wikiModule && pathname.startsWith("/api/wiki")) {
+         const resp = await wikiModule.handleWikiRequest(req, pathname)

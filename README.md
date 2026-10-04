@@ -73,6 +73,7 @@ Each patch is an additive `.patch` with a multi-paragraph header (bug, RCA, fix 
 | `f-projects-no-memory-writes`            | Retire the memory machinery around `PROJECTS.md` (reviewer proposals / tier-B / GC / freshness) — companion to `f-projects-dormant`. |
 | `f-mergesettings-hooks-overlay`          | Compose `LIFEOS/USER/CONFIG/hooks.user.json` over the official `hooks.json` — our hooks leave the official file, so it syncs cleanly with no B∩C collision. |
 | `f-inference-provider`                   | `[inference] mode` in `LIFEOS_CONFIG.toml` (`anthropic-only` · `local-with-fallback` · `local-only`) points `claude` at a local Anthropic-compatible server; Anthropic stays the untouched default and fallback, and the subscription OAuth token is never sent to the local server. |
+| `f-siri-retire`                          | Pulse no longer loads the Siri voice-turn endpoint (tunnel-exposed, and its Agent SDK path bypasses the `claude` gate). |
 
 > Six patches from the 7.1.1 set **dissolved** on the 7.40.4 rebase — upstream independently shipped the same fix (the `~`-path cron preflight, the doc-integrity rename, the TELOS unified-first read, the settings prune-write-path, the module-flag gating, and the cron half-open breaker). Convergent evolution; re-triaged out rather than re-ported.
 

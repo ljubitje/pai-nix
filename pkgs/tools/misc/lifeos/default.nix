@@ -95,6 +95,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ./patches/f-root-bun-types.patch  # f-root-bun-types: @types/bun as a devDependency of the shipped root package.json; ALSO passed to the root vendorTree, so the vendored node_modules and the delivered package.json agree
     ./patches/f-mergesettings-hooks-overlay.patch # f-mergesettings-hooks-overlay: compose LIFEOS/USER/CONFIG/hooks.user.json over official hooks.json (our hooks leave the official file → syncs cleanly, no B∩C)
     ./patches/f-inference-provider.patch # f-inference-provider: [inference] mode in LIFEOS_CONFIG.toml — anthropic-only | local-with-fallback | local-only; claude gets a local env overlay (OAuth never sent to the local server), Anthropic path untouched
+    ./patches/f-siri-retire.patch # f-siri-retire: Pulse no longer loads the Siri endpoint (tunnel-exposed; Agent SDK bypasses the claude gate)
   ];
 
   # `diff -ruN` cannot carry a mode, so f-private-zones' new hook lands 0644 while every
