@@ -58,6 +58,8 @@ stdenv.mkDerivation (finalAttrs: {
       --set DISABLE_AUTOUPDATER 1 \
       --set-default FORCE_AUTOUPDATE_PLUGINS 1 \
       --set DISABLE_INSTALLATION_CHECKS 1 \
+      --set DISABLE_TELEMETRY 1 \
+      --set DISABLE_ERROR_REPORTING 1 \
       --set USE_BUILTIN_RIPGREP 0 \
       ${lib.optionalString stdenv.hostPlatform.isLinux ''
         --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [ alsa-lib ]} \
