@@ -1,0 +1,481 @@
+lifeos-nix patch f-inference-provider — local model server, with Anthropic as fallback
+
+PROBLEM
+  LifeOS can only talk to Anthropic. `claude` is the sole model client (interactive launch,
+  `lifeos -p`, every Inference.ts call spawn it), and Inference.ts actively deletes
+  ANTHROPIC_BASE_URL, so even a hand-set local endpoint is scrubbed. There is no way to run
+  on a local LLM server, and no way to keep Anthropic as a safety net if one is used.
+
+FIX
+  One switch in the USER-zone config, LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml:
+
+    [inference]
+    mode = "local-with-fallback"     # anthropic-only | local-with-fallback | local-only
+    [inference.local]
+    base_url  = "http://host:port"   # must speak Anthropic /v1/messages
+    model     = "name"               # all tiers; [inference.local.models] overrides per tier
+    token_env = "VAR"                # optional
+
+  - NEW LIFEOS/TOOLS/InferenceProvider.ts: validate the section, build the local env overlay
+    (BASE_URL, AUTH_TOKEN, ANTHROPIC_DEFAULT_{FABLE,OPUS,SONNET,HAIKU}_MODEL,
+    SMALL_FAST_MODEL, SUBAGENT_MODEL; local-only adds DISABLE_NONESSENTIAL_TRAFFIC), health
+    check GET {base}/v1/models, append events to MEMORY/OBSERVABILITY/inference-provider.jsonl.
+  - LifeosConfig.ts: loadRawLifeosConfig() — the TOML without identity validation, uncached.
+  - Inference.ts: inference() picks the target; local-with-fallback retries once on
+    Anthropic when the local attempt fails; local-only fails closed. The local target maps
+    the tier (alias or pinned id) to the local model, verifies the executed model against
+    that name, and skips the max→high rung retry when both rungs map to one local model.
+  - lifeos.ts: launch and -p health-check once per launch; healthy → local, down + fallback →
+    Anthropic with a stderr notice, down + local-only → refuse (exit 1).
+
+  The Anthropic path is the upstream code: the local env is layered on top of each caller's
+  existing scrub, never replacing it. No section, no file → anthropic-only. A present but
+  invalid section REFUSES (launcher exits, inference() errors): a typo of "local-only" must
+  never quietly route work to Anthropic.
+
+VERIFIED GOTCHA (why AUTH_TOKEN is always set on the local target)
+  With only ANTHROPIC_BASE_URL set, Claude Code sends the subscription OAuth bearer token to
+  that URL. Measured 2026-10-04 against a header-recording server: BASE_URL alone → the OAuth
+  token arrived; with the placeholder AUTH_TOKEN → 16 requests, no `sk-ant-` value in any
+  header. ANTHROPIC_AUTH_TOKEN outranks OAuth, so a server without auth still gets
+  "lifeos-local-no-auth", never the subscription credential.
+
+SCOPE / CO-EXISTENCE
+  One new file + three edited (Inference.ts, LifeosConfig.ts, lifeos.ts). lifeos.ts hunks are
+  disjoint from f-launcher-cwd (import line, helper after error(), the two spawn env lines).
+  Out of scope (ISA Step 7 fog): cross-vendor lanes under local-only; egress-test K = local host.
+
+VERIFICATION
+  tests/inference-provider/run.sh — 25 tests: resolution + refusals, env overlay, Inference.ts
+  end to end with a recording fake `claude`, launcher against an up/down fake server. Five
+  mutations of this patch (local-only falling back, no placeholder token, launcher not
+  refusing, health always ok, absent section not anthropic-only) each turn the suite red.
+
+diff --git a/LifeOS/install/LIFEOS/TOOLS/Inference.ts b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
+index b0408f9..5b4773e 100755
+--- a/LifeOS/install/LIFEOS/TOOLS/Inference.ts
++++ b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
+@@ -51,6 +51,7 @@ import { join } from "path";
+ import { homedir, tmpdir } from "os";
+ import { randomUUID } from "crypto";
+ import { modelForEffort, pinnedModelForEffort, EFFORT_MODEL, UNIFORM_HARNESS_EFFORT, type EffortLevel, type HarnessEffort } from './models';
++import { loadProviderConfig, localEnv, localModelFor, recordProviderEvent, type ProviderConfig } from './InferenceProvider';
+ 
+ /**
+  * Resolve the claude binary explicitly. launchd jobs run with a minimal PATH
+@@ -128,6 +129,11 @@ export interface InferenceResult {
+    * Opus). undefined when executedModel is unknown. Logged to
+    * MEMORY/OBSERVABILITY/model-verification.jsonl. */
+   modelDowngraded?: boolean;
++  /** lifeos-nix (f-inference-provider): which server answered. undefined = anthropic-only
++   * mode (the pre-patch path). */
++  provider?: 'anthropic' | 'local';
++  /** Set when local-with-fallback fell back: the local attempt's error. */
++  fallbackFrom?: string;
+ }
+ 
+ // Level configurations — models resolve via models.ts EFFORT_MODEL (the single
+@@ -202,12 +208,15 @@ function logModelVerification(entry: Record<string, unknown>): void {
+ /**
+  * Run inference with configurable level
+  */
+-async function inferenceAttempt(options: InferenceOptions, modelOverride?: string): Promise<InferenceResult> {
++async function inferenceAttempt(options: InferenceOptions, modelOverride?: string, local?: ProviderConfig): Promise<InferenceResult> {
+   const level = normalizeLevel(options.level);
+   const config = LEVEL_CONFIG[level];
+   const startTime = Date.now();
+   const timeout = options.timeout || config.defaultTimeout;
+-  const model = modelOverride ?? config.model;
++  const requestedModel = modelOverride ?? config.model;
++  // lifeos-nix (f-inference-provider): on the local target the tier (alias or pinned id)
++  // maps to the configured local model name; the Anthropic path is unchanged.
++  const model = local?.local ? localModelFor(local.local, requestedModel) : requestedModel;
+ 
+   return new Promise((resolve) => {
+     // Unset CLAUDECODE so nested `claude` invocations don't trigger the
+@@ -231,6 +240,9 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+     // still be targeted after the child loses its credentials above, so every
+     // nested call fails auth (401) and retries until timeout. Force real Anthropic API.
+     delete env.ANTHROPIC_BASE_URL;
++    // lifeos-nix (f-inference-provider): the local target is layered on top of the scrub
++    // above, so the Anthropic path below stays byte-identical to upstream.
++    const spawnEnv = local ? localEnv(env, local) : env;
+ 
+     const hasImages = options.imagePaths && options.imagePaths.length > 0;
+ 
+@@ -273,7 +285,7 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+     let stderr = '';
+ 
+     const proc = spawn(resolveClaudeBin(), args, {
+-      env,
++      env: spawnEnv,
+       stdio: ['pipe', 'pipe', 'pipe'],
+     });
+ 
+@@ -362,7 +374,8 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+       // any silent downgrade. A `max` call that runs Opus instead of Fable is
+       // caught HERE instead of being reported as Fable. Logged for max (Fable
+       // audit trail) and for any downgrade at any level.
+-      const expectedTier = EFFORT_MODEL[level];
++      // Local target: the expected "tier" is the local model name itself.
++      const expectedTier = local ? model : EFFORT_MODEL[level];
+       const { executed: executedModel, downgraded: modelDowngraded } = verifyExecutedModel(envelope.modelUsage, expectedTier);
+       if (executedModel && (modelDowngraded || level === 'max')) {
+         logModelVerification({ level, requested: model, expected_tier: expectedTier, executed: executedModel, downgraded: !!modelDowngraded, latency_ms: latencyMs });
+@@ -488,11 +501,34 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+  * observability.
+  */
+ export async function inference(options: InferenceOptions): Promise<InferenceResult> {
++  // lifeos-nix (f-inference-provider): pick the server from [inference] in LIFEOS_CONFIG.toml.
++  // anthropic-only (also: no section, no file) is the upstream path, untouched. An invalid
++  // section fails closed — it never quietly becomes Anthropic.
++  let provider: ProviderConfig;
++  try {
++    provider = loadProviderConfig();
++  } catch (e) {
++    const error = `[Inference] provider config invalid, refusing: ${(e as Error).message}`;
++    recordProviderEvent({ event: 'config-invalid', error });
++    return { success: false, output: '', error, latencyMs: 0, level: normalizeLevel(options.level) };
++  }
++  if (provider.mode === 'anthropic-only') return inferenceOnTarget(options);
++
++  const local = await inferenceOnTarget(options, provider);
++  if (local.success || provider.mode === 'local-only') return { ...local, provider: 'local' };
++
++  console.error(`[Inference] local provider failed (${local.error}); falling back to Anthropic`);
++  recordProviderEvent({ event: 'fallback', surface: 'inference', level: local.level, error: local.error });
++  const anthropic = await inferenceOnTarget(options);
++  return { ...anthropic, provider: 'anthropic', fallbackFrom: local.error };
++}
++
++async function inferenceOnTarget(options: InferenceOptions, local?: ProviderConfig): Promise<InferenceResult> {
+   const level = normalizeLevel(options.level);
+   const config = LEVEL_CONFIG[level];
+   // Validate once here; inferenceAttempt re-validation is then a no-op.
+   const normalized: InferenceOptions = { ...options, level };
+-  const first = await inferenceAttempt(normalized);
++  const first = await inferenceAttempt(normalized, undefined, local);
+   if (first.success || level !== 'max') return first;
+   // The fallback only buys resilience if it resolves to a DIFFERENT model than
+   // the one that just failed. Compare at the TIER level (EFFORT_MODEL), not the
+@@ -507,13 +543,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
+     EFFORT_MODEL.high !== EFFORT_MODEL.max ? 'high'
+     : EFFORT_MODEL.medium !== EFFORT_MODEL.max ? 'medium'
+     : 'low';
++  // Local target: tiers may share one local model, and then the rung retry is the same call
++  // again. Skip it so a local outage reaches the provider fallback without a wasted timeout.
++  if (local?.local && localModelFor(local.local, modelForEffort(fallbackLevel)) === localModelFor(local.local, config.model)) {
++    return first;
++  }
+   console.error(`[Inference] max-level model failed (${first.error}); falling back to ${modelForEffort(fallbackLevel)} (level=${fallbackLevel}, distinct from max)`);
+   // The retry uses `fallbackTimeoutMs` when the caller set one — the pattern
+   // exists for hook callers with a hard wall-clock ceiling, where the max attempt
+   // plus fallback must both fit inside it. Callers without a ceiling omit
+   // it, so the fallback inherits the full `timeout` and degrades gracefully.
+   const fallbackTimeout = options.fallbackTimeoutMs ?? options.timeout ?? config.defaultTimeout;
+-  return inferenceAttempt({ ...normalized, timeout: fallbackTimeout }, modelForEffort(fallbackLevel));
++  return inferenceAttempt({ ...normalized, timeout: fallbackTimeout }, modelForEffort(fallbackLevel), local);
+ }
+ 
+ 
+@@ -570,6 +611,9 @@ async function main() {
+   if (result.executedModel) {
+     console.error(`[model] requested=${level} → executed=${result.executedModel}${result.modelDowngraded ? '  ⚠️ DOWNGRADED from requested tier' : ''}`);
+   }
++  if (result.provider) {
++    console.error(`[provider] ${result.provider}${result.fallbackFrom ? ` (fell back from local: ${result.fallbackFrom})` : ''}`);
++  }
+ 
+   if (result.success) {
+     if (expectJson && result.parsed) {
+diff --git a/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
+new file mode 100644
+index 0000000..fdb02d8
+--- /dev/null
++++ b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
+@@ -0,0 +1,178 @@
++#!/usr/bin/env bun
++/**
++ * InferenceProvider.ts — which model server `claude` talks to.
++ *
++ * lifeos-nix (f-inference-provider). `claude` is the only model client in LifeOS: the
++ * interactive launcher, one-shots, and every Inference.ts call spawn it. So the provider
++ * is chosen by the env handed to that spawn, and this module is the one place that env is
++ * decided. Callers keep their existing Anthropic scrub untouched and layer `localEnv()` on
++ * top only when the local target is selected — the Anthropic path is the pre-patch code.
++ *
++ * Config: `[inference]` in LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml (USER zone; editing it by
++ * hand IS the switch):
++ *
++ *   [inference]
++ *   mode = "local-with-fallback"   # anthropic-only | local-with-fallback | local-only
++ *
++ *   [inference.local]
++ *   base_url  = "http://host:port"  # must speak Anthropic /v1/messages (OpenAI-only servers:
++ *                                   # put a translating proxy in front and point here)
++ *   model     = "some-model"        # default for every tier
++ *   token_env = "LOCAL_LLM_TOKEN"   # optional: env var holding the server's key
++ *   [inference.local.models]        # optional per-tier overrides
++ *   haiku = "small-model"
++ *
++ * Absent section or absent file → anthropic-only. A present-but-invalid section THROWS:
++ * a typo of "local-only" must never quietly route private work to Anthropic.
++ *
++ * CLI: `bun InferenceProvider.ts` prints the resolved config and local health.
++ */
++
++import { appendFileSync, mkdirSync } from "node:fs";
++import { join } from "node:path";
++import { homedir } from "node:os";
++import { loadRawLifeosConfig } from "./LifeosConfig";
++
++export const MODES = ["anthropic-only", "local-with-fallback", "local-only"] as const;
++export type InferenceMode = (typeof MODES)[number];
++
++export const TIERS = ["fable", "opus", "sonnet", "haiku"] as const;
++export type Tier = (typeof TIERS)[number];
++
++export interface LocalProvider {
++  baseUrl: string;
++  /** Resolved model per tier — every tier is filled (default `model` or override). */
++  models: Record<Tier, string>;
++  tokenEnv?: string;
++}
++
++export interface ProviderConfig {
++  mode: InferenceMode;
++  local?: LocalProvider;
++}
++
++export const ANTHROPIC_ONLY: ProviderConfig = { mode: "anthropic-only" };
++
++/** Pure: raw `[inference]` table → validated config. `where` names the file in errors. */
++export function resolveProviderConfig(raw: unknown, where = "LIFEOS_CONFIG.toml"): ProviderConfig {
++  if (raw === undefined || raw === null) return ANTHROPIC_ONLY;
++  if (typeof raw !== "object") throw new Error(`[inference] in ${where} must be a table`);
++  const t = raw as Record<string, any>;
++
++  const mode = t.mode ?? "anthropic-only";
++  if (!(MODES as readonly string[]).includes(mode)) {
++    throw new Error(`[inference] mode = ${JSON.stringify(mode)} in ${where} — use ${MODES.join(" | ")}`);
++  }
++  if (mode === "anthropic-only") return ANTHROPIC_ONLY;
++
++  const l = t.local;
++  if (!l || typeof l !== "object") {
++    throw new Error(`[inference] mode = "${mode}" needs an [inference.local] table in ${where}`);
++  }
++  if (typeof l.base_url !== "string" || !/^https?:\/\/[^\s/]+/.test(l.base_url)) {
++    throw new Error(`[inference.local] base_url must be an http(s) URL in ${where}`);
++  }
++  const overrides = (l.models ?? {}) as Record<string, unknown>;
++  for (const k of Object.keys(overrides)) {
++    if (!(TIERS as readonly string[]).includes(k)) {
++      throw new Error(`[inference.local.models] unknown tier "${k}" in ${where} — use ${TIERS.join(" | ")}`);
++    }
++  }
++  const models = {} as Record<Tier, string>;
++  for (const tier of TIERS) {
++    const m = overrides[tier] ?? l.model;
++    if (typeof m !== "string" || !m) {
++      throw new Error(`[inference.local] no model for tier "${tier}" in ${where} — set model = "…" or models.${tier}`);
++    }
++    models[tier] = m;
++  }
++  if (l.token_env !== undefined && (typeof l.token_env !== "string" || !l.token_env)) {
++    throw new Error(`[inference.local] token_env must be an env var name in ${where}`);
++  }
++  return {
++    mode,
++    local: { baseUrl: l.base_url.replace(/\/+$/, ""), models, tokenEnv: l.token_env },
++  };
++}
++
++/** Read and validate the live config. No config file → anthropic-only; invalid → throws. */
++export function loadProviderConfig(): ProviderConfig {
++  const loaded = loadRawLifeosConfig();
++  if (!loaded) return ANTHROPIC_ONLY;
++  return resolveProviderConfig(loaded.raw.inference, loaded.path);
++}
++
++/** Tier of an alias or a pinned id ("opus", "claude-opus-5"); undefined if neither. */
++export function tierOf(model: string): Tier | undefined {
++  const m = model.toLowerCase().match(/(fable|opus|sonnet|haiku)/);
++  return m ? (m[1] as Tier) : undefined;
++}
++
++/** The local model name a requested Claude model maps to. Unknown → the opus mapping. */
++export function localModelFor(local: LocalProvider, model: string): string {
++  return local.models[tierOf(model) ?? "opus"];
++}
++
++/**
++ * Overlay the local target onto an env the caller has already scrubbed. ANTHROPIC_AUTH_TOKEN
++ * is ALWAYS set: it outranks the subscription OAuth credential, so the OAuth token can never
++ * be sent to the local server (a server without auth gets a placeholder).
++ */
++export function localEnv(
++  base: Record<string, string | undefined>,
++  cfg: ProviderConfig,
++): Record<string, string | undefined> {
++  if (!cfg.local) throw new Error("localEnv: no [inference.local] configured");
++  const { local } = cfg;
++  const env = { ...base };
++  delete env.ANTHROPIC_API_KEY;
++  env.ANTHROPIC_BASE_URL = local.baseUrl;
++  env.ANTHROPIC_AUTH_TOKEN = (local.tokenEnv && base[local.tokenEnv]) || "lifeos-local-no-auth";
++  env.ANTHROPIC_MODEL = local.models.fable; // session default = top rung, as on Anthropic
++  env.ANTHROPIC_DEFAULT_FABLE_MODEL = local.models.fable;
++  env.ANTHROPIC_DEFAULT_OPUS_MODEL = local.models.opus;
++  env.ANTHROPIC_DEFAULT_SONNET_MODEL = local.models.sonnet;
++  env.ANTHROPIC_DEFAULT_HAIKU_MODEL = local.models.haiku;
++  env.ANTHROPIC_SMALL_FAST_MODEL = local.models.haiku;
++  env.CLAUDE_CODE_SUBAGENT_MODEL = local.models.opus;
++  if (cfg.mode === "local-only") env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
++  return env;
++}
++
++/** Is the local server answering? `GET {base}/v1/models` with a short timeout. */
++export async function localHealthy(cfg: ProviderConfig, timeoutMs = 2000): Promise<boolean> {
++  if (!cfg.local) return false;
++  const token = (cfg.local.tokenEnv && process.env[cfg.local.tokenEnv]) || "lifeos-local-no-auth";
++  try {
++    const res = await fetch(`${cfg.local.baseUrl}/v1/models`, {
++      headers: { authorization: `Bearer ${token}`, "x-api-key": token },
++      signal: AbortSignal.timeout(timeoutMs),
++    });
++    return res.ok;
++  } catch {
++    return false;
++  }
++}
++
++/** Append a provider event (fallback, refusal, invalid config). Never throws. */
++export function recordProviderEvent(entry: Record<string, unknown>): void {
++  try {
++    const dir = join(homedir(), ".claude", "LIFEOS", "MEMORY", "OBSERVABILITY");
++    mkdirSync(dir, { recursive: true });
++    appendFileSync(
++      join(dir, "inference-provider.jsonl"),
++      JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n",
++    );
++  } catch { /* observability must never break inference */ }
++}
++
++if (import.meta.main) {
++  try {
++    const cfg = loadProviderConfig();
++    const healthy = cfg.local ? await localHealthy(cfg) : undefined;
++    console.log(JSON.stringify({ ...cfg, localHealthy: healthy }, null, 2));
++  } catch (e) {
++    console.error((e as Error).message);
++    process.exit(1);
++  }
++}
+diff --git a/LifeOS/install/LIFEOS/TOOLS/LifeosConfig.ts b/LifeOS/install/LIFEOS/TOOLS/LifeosConfig.ts
+index 5b47d90..79dafcf 100644
+--- a/LifeOS/install/LIFEOS/TOOLS/LifeosConfig.ts
++++ b/LifeOS/install/LIFEOS/TOOLS/LifeosConfig.ts
+@@ -125,6 +125,30 @@ export function loadLifeosConfig(opts: { path?: string; force?: boolean } = {}):
+   return validated;
+ }
+ 
++/**
++ * lifeos-nix (f-inference-provider): the parsed TOML without the identity validation above,
++ * for sections whose consumers must not depend on [principal]/[da] being filled in
++ * (InferenceProvider reads [inference] here). null when the file does not exist; a TOML
++ * syntax error throws. Uncached on purpose: callers read once per launch or per call, and a
++ * hand edit of the file must take effect on the next read.
++ */
++export function loadRawLifeosConfig(
++  opts: { path?: string } = {},
++): { raw: Record<string, any>; path: string } | null {
++  const path = opts.path ?? process.env.LIFEOS_CONFIG_PATH ?? DEFAULT_CONFIG_PATH;
++  if (!existsSync(path)) return null;
++  try {
++    delete require.cache[require.resolve(path)];
++  } catch {
++    // require.resolve can throw on first read; safe to ignore.
++  }
++  const raw = require(path) as unknown;
++  if (!raw || typeof raw !== "object") {
++    throw new Error(`LifeosConfig: ${path} did not parse to an object`);
++  }
++  return { raw: raw as Record<string, any>, path };
++}
++
+ export function clearLifeosConfigCache(): void {
+   cache = null;
+ }
+diff --git a/LifeOS/install/LIFEOS/TOOLS/lifeos.ts b/LifeOS/install/LIFEOS/TOOLS/lifeos.ts
+index 8be06f1..06cb23d 100755
+--- a/LifeOS/install/LIFEOS/TOOLS/lifeos.ts
++++ b/LifeOS/install/LIFEOS/TOOLS/lifeos.ts
+@@ -25,6 +25,7 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, symlinkSync, unli
+ import { homedir } from "os";
+ import { join, basename } from "path";
+ import { PULSE_BASE } from "../PULSE/endpoint";
++import { loadProviderConfig, localEnv, localHealthy, recordProviderEvent } from "./InferenceProvider";
+ 
+ // ============================================================================
+ // Configuration
+@@ -106,6 +107,41 @@ function error(message: string): never {
+   process.exit(1);
+ }
+ 
++/**
++ * lifeos-nix (f-inference-provider): choose the model server for a `claude` spawn from
++ * [inference] in LIFEOS_CONFIG.toml. `env` is the caller's existing Anthropic env and is
++ * returned untouched for anthropic-only (also: no section, no file). The choice is made once
++ * per launch — switching providers means editing the file and starting a new session.
++ */
++async function withInferenceProvider(
++  env: Record<string, string | undefined>,
++  surface: string,
++): Promise<Record<string, string | undefined>> {
++  let cfg;
++  try {
++    cfg = loadProviderConfig();
++  } catch (e) {
++    recordProviderEvent({ event: "config-invalid", surface, error: (e as Error).message });
++    error(`inference config invalid, refusing to start: ${(e as Error).message}`);
++  }
++  if (cfg.mode === "anthropic-only") return env;
++  const base = cfg.local!.baseUrl;
++  if (await localHealthy(cfg)) {
++    console.error(`🧠 inference: local (${base}, mode=${cfg.mode})`);
++    return localEnv(env, cfg);
++  }
++  if (cfg.mode === "local-only") {
++    recordProviderEvent({ event: "refused", surface, base_url: base });
++    error(
++      `inference mode is local-only and ${base} is not answering — refusing to start.\n` +
++        `   Bring the server up, or switch [inference] mode in LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml.`,
++    );
++  }
++  recordProviderEvent({ event: "fallback", surface, base_url: base });
++  console.error(`⚠️  inference: ${base} is not answering — this session runs on Anthropic (fallback)`);
++  return env;
++}
++
+ // A Core-only install declines the hooks tree, so ../../hooks/lib/identity may
+ // not exist on disk. Resolve it lazily and fall back to a nameless, voiceless
+ // identity when it is absent (public issue #1694, @dissembler21-png). With the
+@@ -563,7 +599,7 @@ async function cmdLaunch(options: { mcp?: string; resume?: boolean; resumeId?: s
+   launchEnv.CLAUDE_CODE_WORKFLOWS = "1";
+   const proc = spawn(args, {
+     stdio: ["inherit", "inherit", "inherit"],
+-    env: launchEnv,
++    env: await withInferenceProvider(launchEnv, "launch"),
+   });
+ 
+   // Wait for Claude to exit
+@@ -681,7 +717,7 @@ async function cmdPrompt(prompt: string) {
+   env.CLAUDE_CODE_WORKFLOWS = "1";
+   const proc = spawn(args, {
+     stdio: ["inherit", "inherit", "inherit"],
+-    env,
++    env: (await withInferenceProvider(env, "prompt")) as Record<string, string>,
+   });
+ 
+   const exitCode = await proc.exited;
