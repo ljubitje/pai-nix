@@ -36,7 +36,16 @@ FIX
   - an explicit Anthropic request (target hint) under local-only refuses;
   - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, CLAUDE_CODE_DISABLE_WEB_FETCH (WebFetch asks
     api.anthropic.com about every domain first) and ENABLE_CLAUDEAI_MCP_SERVERS=false;
-  - the gate refuses on any error, including its own crash; LIFEOS_GATE=off is the only bypass.
+  - the gate refuses on any error, including its own crash; LIFEOS_GATE=off is the only bypass,
+    and it is refused inside a local-only session.
+  Second review (2026-10-04/05) closed: a project bunfig.toml preload ran inside the gate and
+  its output was eval'd (gate now runs from / with --config=/dev/null; protocol on fd 3 with a
+  sentinel, so stray output and stale payloads refuse); the gate path came from $HOME (now
+  CLAUDE_CONFIG_DIR, then passwd home; a config naming local-only without a gate refuses);
+  under local-only, `claude update/install/setup-token/login/logout/auth` and settings files
+  whose env re-routes claude refuse; base_url is parsed (no userinfo, no Anthropic host);
+  Bedrock/Vertex/Foundry routing is switched off on the local target; the user's own values
+  are saved and restored on the Anthropic path; health is cached 30 s per base_url.
   Not covered here: the Agent SDK runs its own bundled binary, not the wrapper — its users
   (Siri, iMessage) are retired/disabled (f-siri-retire); a network-level block is ISA Step 7c.
 
@@ -51,9 +60,10 @@ SCOPE / CO-EXISTENCE
   longer touched: the gate in the claude wrapper covers it.
 
 VERIFICATION
-  tests/inference-provider/run.sh — resolution and refusals, sticky local-only, env overlay and
-  strip, the full decide() table, the real gate script end to end against a recording fake
-  claude and an up/down fake server, Inference.ts through the gate. Mutation-checked.
+  tests/inference-provider/run.sh — 62 tests: resolution and refusals, sticky local-only, env
+  overlay/strip/restore, the decide() table, the real gate script end to end (bunfig preload,
+  stale payload, settings re-route, subcommands, GATE=off, health cache) against a recording
+  fake claude and an up/down fake server, Inference.ts through the gate. 17 mutations killed.
 
 diff --git a/LifeOS/install/LIFEOS/TOOLS/Inference.ts b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 index b0408f9..b46ed52 100755
@@ -205,10 +215,10 @@ index b0408f9..b46ed52 100755
      if (expectJson && result.parsed) {
 diff --git a/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
 new file mode 100644
-index 0000000..575b153
+index 0000000..9e355ad
 --- /dev/null
 +++ b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
-@@ -0,0 +1,329 @@
+@@ -0,0 +1,439 @@
 +#!/usr/bin/env bun
 +/**
 + * InferenceProvider.ts — which model server `claude` talks to, decided at every exec.
@@ -243,8 +253,8 @@ index 0000000..575b153
 + *      `bun InferenceProvider.ts gate` prints shell code for the claude wrapper (see gate()).
 + */
 +
-+import { appendFileSync, mkdirSync } from "node:fs";
-+import { join } from "node:path";
++import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
++import { dirname, join } from "node:path";
 +import { homedir } from "node:os";
 +import { loadRawLifeosConfig } from "./LifeosConfig";
 +
@@ -260,7 +270,9 @@ index 0000000..575b153
 +export const APPLIED_MARKER = "LIFEOS_INFERENCE_LOCAL";
 +/** Optional per-spawn request: "local" | "anthropic" (Inference.ts uses it for fallback). */
 +export const TARGET_HINT = "LIFEOS_INFERENCE_TARGET";
-+/** LIFEOS_GATE=off bypasses the gate entirely (manual escape hatch, never set by code). */
++/** JSON of the values localEnv() overwrote, restored by anthropicEnv(). */
++export const SAVED_MARKER = "LIFEOS_INFERENCE_SAVED";
++/** LIFEOS_GATE=off bypasses the gate (manual escape hatch; refused inside local-only). */
 +export const PLACEHOLDER_TOKEN = "lifeos-local-no-auth";
 +
 +/** Every variable localEnv() may set — removed again on the Anthropic path. */
@@ -270,8 +282,28 @@ index 0000000..575b153
 +  "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
 +  "ANTHROPIC_SMALL_FAST_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL",
 +  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_WEB_FETCH",
-+  "ENABLE_CLAUDEAI_MCP_SERVERS", APPLIED_MARKER,
++  "ENABLE_CLAUDEAI_MCP_SERVERS",
++  // Cloud-provider routing outranks ANTHROPIC_BASE_URL; it is switched off on the local target.
++  "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
++  "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_VERTEX_BASE_URL", "ANTHROPIC_FOUNDRY_BASE_URL",
 +] as const;
++
++/** Set only under local-only; never removed from a user who set them. */
++const PRIVACY_KEYS: readonly string[] = [
++  "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_WEB_FETCH", "ENABLE_CLAUDEAI_MCP_SERVERS",
++];
++
++/** Hosts that are Anthropic, by suffix. A "local" base_url pointing at one is refused. */
++export const ANTHROPIC_HOST_SUFFIXES = ["anthropic.com", "claude.ai", "claude.com"] as const;
++const isAnthropicHost = (h: string) =>
++  ANTHROPIC_HOST_SUFFIXES.some((d) => h === d || h.endsWith(`.${d}`));
++
++/** claude subcommands that talk to Anthropic whatever ANTHROPIC_BASE_URL says. */
++export const ANTHROPIC_SUBCOMMANDS = ["update", "upgrade", "install", "setup-token", "login", "logout", "auth"] as const;
++
++/** Settings env keys that would re-route claude after the gate has decided. */
++const ROUTING_SETTINGS_KEYS = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
++  "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"];
 +
 +export interface LocalProvider {
 +  baseUrl: string;
@@ -315,8 +347,17 @@ index 0000000..575b153
 +    throw new Error(`[inference] mode = "${mode}" needs an [inference.local] table in ${where}`);
 +  }
 +  rejectUnknown(l, ["base_url", "model", "models", "token_env"], "inference.local", where);
-+  if (typeof l.base_url !== "string" || !/^https?:\/\/[^\s/]+/.test(l.base_url)) {
++  let url: URL;
++  try {
++    url = new URL(String(l.base_url));
++  } catch {
 +    throw new Error(`[inference.local] base_url must be an http(s) URL in ${where}`);
++  }
++  if (!/^https?:$/.test(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) {
++    throw new Error(`[inference.local] base_url must be a plain http(s) URL (no user, query or fragment) in ${where}`);
++  }
++  if (isAnthropicHost(url.hostname.toLowerCase())) {
++    throw new Error(`[inference.local] base_url points at Anthropic (${url.hostname}) in ${where}`);
 +  }
 +  const overrides = (l.models ?? {}) as Record<string, unknown>;
 +  if (typeof overrides !== "object") throw new Error(`[inference.local.models] must be a table in ${where}`);
@@ -332,7 +373,7 @@ index 0000000..575b153
 +  if (l.token_env !== undefined && (typeof l.token_env !== "string" || !l.token_env)) {
 +    throw new Error(`[inference.local] token_env must be an env var name in ${where}`);
 +  }
-+  const local = { baseUrl: l.base_url.replace(/\/+$/, ""), models, tokenEnv: l.token_env };
++  const local = { baseUrl: `${url.origin}${url.pathname}`.replace(/\/+$/, ""), models, tokenEnv: l.token_env };
 +  // A validated local table under anthropic-only is kept out of the result on purpose.
 +  return mode === "anthropic-only" ? ANTHROPIC_ONLY : { mode, local };
 +}
@@ -382,6 +423,15 @@ index 0000000..575b153
 +  if (!cfg.local) throw new Error("localEnv: no [inference.local] configured");
 +  const { local } = cfg;
 +  const env = { ...base };
++  // Remember what the overlay replaces, once, so the Anthropic path can give it back.
++  if (!base[APPLIED_MARKER]) {
++    const saved: Record<string, string> = {};
++    for (const k of LOCAL_KEYS) if (base[k] !== undefined) saved[k] = base[k]!;
++    if (base.ANTHROPIC_API_KEY !== undefined) saved.ANTHROPIC_API_KEY = base.ANTHROPIC_API_KEY;
++    if (Object.keys(saved).length) env[SAVED_MARKER] = JSON.stringify(saved);
++  }
++  // Routing keys are replaced; the user's own privacy opt-outs stay as they are.
++  for (const k of LOCAL_KEYS) if (!PRIVACY_KEYS.includes(k)) delete env[k];
 +  delete env.ANTHROPIC_API_KEY;
 +  env.ANTHROPIC_BASE_URL = local.baseUrl;
 +  env.ANTHROPIC_AUTH_TOKEN = localToken(local, base);
@@ -404,17 +454,75 @@ index 0000000..575b153
 +  return env;
 +}
 +
-+/** Remove what localEnv added (only when it did), so an Anthropic spawn from inside a local
-+ * session does not carry local model names or the local URL. */
++/** Undo localEnv (only when it ran): drop what it set and restore what it replaced, so an
++ * Anthropic spawn from inside a local session has the user's own baseline back. */
 +export function anthropicEnv(base: Env): Env {
 +  const env = { ...base };
-+  if (env[APPLIED_MARKER]) for (const k of LOCAL_KEYS) delete env[k];
++  if (!env[APPLIED_MARKER]) return env;
++  for (const k of LOCAL_KEYS) delete env[k];
++  delete env[APPLIED_MARKER];
++  const saved = env[SAVED_MARKER];
++  delete env[SAVED_MARKER];
++  if (saved) {
++    try {
++      for (const [k, v] of Object.entries(JSON.parse(saved) as Record<string, string>)) {
++        if (typeof v === "string") env[k] = v;
++      }
++    } catch { /* a mangled record restores nothing rather than something wrong */ }
++  }
 +  return env;
 +}
 +
-+/** Is the local server answering? `GET {base}/v1/models` with the session's own credential. */
++/** Routing keys set in the settings files claude will load on top of the gate's env. */
++export function settingsRoutingOverrides(cwd: string, home: string): string[] {
++  const files = [join(home, ".claude", "settings.json")];
++  for (let d = cwd; ; d = dirname(d)) {
++    files.push(join(d, ".claude", "settings.json"), join(d, ".claude", "settings.local.json"));
++    if (dirname(d) === d) break;
++  }
++  const hits: string[] = [];
++  for (const f of files) {
++    if (!existsSync(f)) continue;
++    let env: unknown;
++    try {
++      env = (JSON.parse(readFileSync(f, "utf8")) as { env?: unknown }).env;
++    } catch {
++      hits.push(`${f} (unreadable)`);
++      continue;
++    }
++    if (env && typeof env === "object") {
++      for (const k of ROUTING_SETTINGS_KEYS) if (k in (env as object)) hits.push(`${f}: env.${k}`);
++    }
++  }
++  return hits;
++}
++
++const HEALTH_TTL_MS = 30_000;
++
++/** Is the local server answering? `GET {base}/v1/models` with the session's own credential.
++ * Cached for 30 s per base_url in $XDG_RUNTIME_DIR, so a down server costs one timeout per
++ * window, not one per exec. Only local-with-fallback asks; local-only never health-checks. */
 +export async function localHealthy(cfg: ProviderConfig, env: Env = process.env, timeoutMs = 2000): Promise<boolean> {
 +  if (!cfg.local) return false;
++  const runtime = env.XDG_RUNTIME_DIR;
++  const cacheFile = runtime
++    ? join(runtime, `lifeos-inference-health-${Bun.hash(cfg.local.baseUrl).toString(16)}.json`)
++    : undefined;
++  if (cacheFile) {
++    try {
++      const c = JSON.parse(readFileSync(cacheFile, "utf8")) as { ok: boolean; ts: number };
++      if (Date.now() - c.ts < HEALTH_TTL_MS) return c.ok;
++    } catch { /* no cache yet */ }
++  }
++  const ok = await probeHealth(cfg.local, env, timeoutMs);
++  if (cacheFile) {
++    try { writeFileSync(cacheFile, JSON.stringify({ ok, ts: Date.now() }), { mode: 0o600 }); } catch { /* best effort */ }
++  }
++  return ok;
++}
++
++async function probeHealth(local: LocalProvider, env: Env, timeoutMs: number): Promise<boolean> {
++  const cfg = { local };
 +  const token = localToken(cfg.local, env);
 +  try {
 +    const res = await fetch(`${cfg.local.baseUrl}/v1/models`, {
@@ -455,6 +563,8 @@ index 0000000..575b153
 +  env: Env,
 +  load: () => ProviderConfig,
 +  healthy: (cfg: ProviderConfig, env: Env) => Promise<boolean>,
++  argv: string[] = [],
++  overrides: () => string[] = () => [],
 +): Promise<GateDecision> {
 +  let cfg: ProviderConfig;
 +  try {
@@ -472,6 +582,14 @@ index 0000000..575b153
 +  if (cfg.mode === "anthropic-only") return { action: "exec", env: anthropicEnv(clean) };
 +  if (cfg.mode === "local-only") {
 +    if (hint === "anthropic") return { action: "refuse", reason: "inference mode is local-only — Anthropic is not allowed" };
++    const sub = argv.find((a) => !a.startsWith("-"));
++    if (sub && (ANTHROPIC_SUBCOMMANDS as readonly string[]).includes(sub)) {
++      return { action: "refuse", reason: `"claude ${sub}" talks to Anthropic — not allowed under local-only` };
++    }
++    const hits = overrides();
++    if (hits.length) {
++      return { action: "refuse", reason: `settings would re-route claude under local-only: ${hits.join("; ")}` };
++    }
 +    return { action: "exec", env: localEnv(clean, cfg) };
 +  }
 +  if (hint === "anthropic") return { action: "exec", env: anthropicEnv(clean) };
@@ -505,25 +623,27 @@ index 0000000..575b153
 + * reason on stderr and exits 3. The wrapper refuses to exec on any non-zero exit, so a crash
 + * here is a refusal too.
 + */
-+async function gate(): Promise<never> {
++async function gate(argv: string[]): Promise<never> {
 +  const env = process.env as Env;
-+  const d = await decide(env, () => loadProviderConfig(env), localHealthy);
++  const d = await decide(env, () => loadProviderConfig(env), localHealthy, argv,
++    () => settingsRoutingOverrides(env.LIFEOS_GATE_CWD || process.cwd(), env.HOME || homedir()));
 +  if (d.action === "refuse") {
 +    recordProviderEvent({ event: "refused", surface: "gate", reason: d.reason });
 +    console.error(`❌ ${d.reason}`);
-+    console.error(`   Fix [inference] in LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml (LIFEOS_GATE=off bypasses the gate).`);
++    console.error(`   Fix [inference] in LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml (outside local-only, LIFEOS_GATE=off bypasses the gate).`);
 +    process.exit(3);
 +  }
 +  if (d.notice) console.error(`⚠️  ${d.notice}`);
 +  if (d.event) recordProviderEvent({ event: d.event, surface: "gate" });
-+  process.stdout.write(envDiffShell(env, d.env) + "\n");
++  // fd 3 only: the wrapper evals fd 3 and sends stdout to stderr. Sentinel last.
++  writeSync(3, `${envDiffShell(env, d.env)}\n: lifeos-gate-ok\n`);
 +  process.exit(0);
 +}
 +
 +if (import.meta.main) {
 +  if (process.argv[2] === "gate") {
 +    try {
-+      await gate();
++      await gate(process.argv.slice(3));
 +    } catch (e) {
 +      console.error(`❌ inference gate crashed: ${(e as Error).message}`);
 +      process.exit(3);

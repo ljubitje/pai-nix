@@ -23,7 +23,7 @@ cp "$HERE/InferenceProvider.test.ts" "$ROOT/LIFEOS/TOOLS/"
 # whose modelUsage names the model it was asked for. It sits BEHIND the real gate script.
 mkdir -p "$TREE/real"
 cat > "$TREE/real/claude" <<'FAKE'
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --config=/dev/null
 import { appendFileSync } from "node:fs";
 const a = process.argv.slice(2);
 const i = a.indexOf("--model");
@@ -46,5 +46,5 @@ cd "$ROOT/LIFEOS/TOOLS"
 # Scrub provider vars from the outer shell so the anthropic-only assertions see only what
 # the code under test sets.
 env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u CLAUDECODE \
-  -u LIFEOS_INFERENCE_MODE -u LIFEOS_INFERENCE_TARGET -u LIFEOS_GATE \
+  -u LIFEOS_INFERENCE_MODE -u LIFEOS_INFERENCE_TARGET -u LIFEOS_GATE -u XDG_RUNTIME_DIR \
   HOME="$TREE/home" CLAUDE_CONFIG_DIR="$ROOT" PATH="$TREE/home/bin:$PATH" bun test InferenceProvider.test.ts

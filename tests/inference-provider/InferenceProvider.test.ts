@@ -51,6 +51,9 @@ test.each([
   [{ mode: "local-only", local: { base_url: "http://x", model: "m", models: { gpt: "y" } } }, /unknown key "gpt"/],
   [{ mode: "local-only", local: { base_url: "http://x", model: "m", token_env: "" } }, /token_env/],
   [{ mode: "anthropic-only", local: { base_url: "nonsense" } }, /base_url/],
+  [{ mode: "local-only", local: { base_url: "http://x@api.anthropic.com", model: "m" } }, /plain http/],
+  [{ mode: "local-only", local: { base_url: "https://api.anthropic.com", model: "m" } }, /points at Anthropic/],
+  [{ mode: "local-only", local: { base_url: "https://foo.claude.ai/v1", model: "m" } }, /points at Anthropic/],
 ])("invalid section refuses loudly: %j", (raw, msg) => {
   expect(() => resolveProviderConfig(raw, "/cfg.toml")).toThrow(msg);
   expect(() => resolveProviderConfig(raw, "/cfg.toml")).toThrow(/\/cfg\.toml/);
@@ -115,6 +118,19 @@ test("anthropicEnv strips exactly what localEnv added, and nothing when it added
   expect(anthropicEnv(own)).toEqual(own);
 });
 
+test("the user's own routing and privacy settings survive a local → Anthropic round trip", () => {
+  const user = {
+    ANTHROPIC_BASE_URL: "https://corp-proxy", ANTHROPIC_API_KEY: "sk-own",
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", CLAUDE_CODE_USE_BEDROCK: "1", KEEP: "1",
+  };
+  const local = localEnv(user, resolveProviderConfig(LOCAL));
+  expect(local.CLAUDE_CODE_USE_BEDROCK).toBeUndefined(); // would outrank the local server
+  expect(local.ANTHROPIC_API_KEY).toBeUndefined();
+  expect(local.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1"); // opt-out kept on local too
+  const nested = localEnv(local, resolveProviderConfig(LOCAL)); // a local child of a local session
+  expect(anthropicEnv(nested)).toEqual(user);
+});
+
 test("envDiffShell round-trips through bash, including quotes", async () => {
   const before = { A: "1", GONE: "x" };
   const after = { A: "1", B: "it's \"q\" $HOME `x`" };
@@ -143,6 +159,17 @@ test.each([
   const got = d.action === "refuse" ? "refuse" : d.env.ANTHROPIC_BASE_URL ? "local" : "anthropic";
   expect(got).toBe(want);
   if (d.action === "exec") expect(d.env.LIFEOS_INFERENCE_TARGET).toBeUndefined();
+});
+
+test.each(["update", "install", "setup-token", "login", "auth"])("decide: local-only refuses `claude %s`", async (sub) => {
+  const d = await decide({}, cfgOf("local-only"), up, ["--verbose", sub]);
+  expect(d.action).toBe("refuse");
+});
+
+test("decide: local-only refuses when settings would re-route; fallback mode does not check", async () => {
+  const hits = () => ["/p/.claude/settings.json: env.ANTHROPIC_BASE_URL"];
+  expect((await decide({}, cfgOf("local-only"), up, [], hits)).action).toBe("refuse");
+  expect((await decide({}, cfgOf("local-with-fallback"), up, [], hits)).action).toBe("exec");
 });
 
 test("decide: invalid config refuses", async () => {
@@ -256,6 +283,68 @@ test("gate: LIFEOS_GATE=off is a plain exec", async () => {
   config("local-only");
   const r = await claude({ LIFEOS_GATE: "off" });
   expect(r.spawns[0].env.ANTHROPIC_BASE_URL).toBeUndefined();
+});
+
+test("gate: LIFEOS_GATE=off inside a local-only session refuses", async () => {
+  config("local-only");
+  const r = await claude({ LIFEOS_GATE: "off", LIFEOS_INFERENCE_MODE: "local-only" });
+  expect(r.code).toBe(3);
+  expect(r.spawns.length).toBe(0);
+});
+
+test("gate: a project bunfig.toml preload never runs inside the decision", async () => {
+  config("local-only");
+  const dir = join(HOME, "evil");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "bunfig.toml"), 'preload = ["./pre.ts"]\n');
+  writeFileSync(join(dir, "pre.ts"),
+    'import { writeSync } from "node:fs"; writeSync(2, "PRELOAD-RAN\\n"); try { writeSync(3, "export ANTHROPIC_BASE_URL=https://api.anthropic.com\\n"); } catch {}\n');
+  const r = await claude({}, dir);
+  expect(r.stderr).not.toContain("PRELOAD-RAN");
+  expect(r.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
+});
+
+test("gate: project settings that re-route claude refuse under local-only", async () => {
+  config("local-only");
+  const dir = join(HOME, "proj-settings");
+  mkdirSync(join(dir, ".claude"), { recursive: true });
+  writeFileSync(join(dir, ".claude", "settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://api.anthropic.com" } }));
+  const r = await claude({}, dir);
+  expect(r.code).toBe(3);
+  expect(r.stderr).toMatch(/re-route/);
+  expect(r.spawns.length).toBe(0);
+});
+
+test("gate: `claude update` refuses under local-only", async () => {
+  config("local-only");
+  reset();
+  const p = Bun.spawn([GATE, "update"], { env: process.env as any, stdout: "pipe", stderr: "pipe" });
+  expect(await p.exited).toBe(3);
+  expect(spawns().length).toBe(0);
+});
+
+test("gate: a stale payload whose gate does not speak the protocol refuses", async () => {
+  config("local-only");
+  const stale = join(HOME, "stale-lifeos");
+  mkdirSync(join(stale, "LIFEOS/TOOLS"), { recursive: true });
+  writeFileSync(join(stale, "LIFEOS/TOOLS/InferenceProvider.ts"), 'console.log(JSON.stringify({ mode: "local-only" }));\n');
+  const r = await claude({ CLAUDE_CONFIG_DIR: stale });
+  expect(r.code).toBe(3);
+  expect(r.stderr).toMatch(/no decision/);
+  expect(r.spawns.length).toBe(0);
+});
+
+test("gate: a down server is probed once per cache window, not once per exec", async () => {
+  config("local-with-fallback");
+  const runtime = join(HOME, "runtime");
+  mkdirSync(runtime, { recursive: true });
+  serverUp = false;
+  await claude({ XDG_RUNTIME_DIR: runtime });
+  serverUp = true;
+  const cached = await claude({ XDG_RUNTIME_DIR: runtime });
+  expect(cached.spawns[0].env.ANTHROPIC_BASE_URL).toBeUndefined(); // still the cached "down"
+  const fresh = await claude({ XDG_RUNTIME_DIR: undefined });
+  expect(fresh.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
 });
 
 test("gate: missing gate file + local-only marker refuses", async () => {
