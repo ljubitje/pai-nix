@@ -410,6 +410,19 @@ test("gate: an env delta that fails to apply refuses (readonly var via BASH_ENV)
   expect(r.spawns.length).toBe(0);
 });
 
+test("gate: a uid passwd cannot resolve runs claude, unless inside a local-only session", async () => {
+  config(null);
+  const run = async (extra: Record<string, string>) => {
+    reset();
+    const p = Bun.spawn([process.env.NOPW_GATE!, "--version"], { env: { ...process.env, ...extra } as any, stdout: "pipe", stderr: "pipe" });
+    return p.exited;
+  };
+  expect(await run({})).toBe(0);
+  expect(spawns().length).toBe(1);
+  expect(await run({ LIFEOS_INFERENCE_MODE: "local-only" })).toBe(3);
+  expect(spawns().length).toBe(0);
+});
+
 test("gate: missing gate file + local-only marker refuses", async () => {
   const r = await claude({ CLAUDE_CONFIG_DIR: join(HOME, "no-lifeos"), LIFEOS_INFERENCE_MODE: "local-only" });
   expect(r.code).toBe(3);

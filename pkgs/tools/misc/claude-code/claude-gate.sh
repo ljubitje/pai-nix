@@ -16,7 +16,9 @@ fi
 # which a caller can unset or point elsewhere while claude itself still finds the real home).
 # Store paths, not the caller's PATH: Pulse's unit PATH has no getent (review 3).
 pwhome="$(@getent@/bin/getent passwd "$(@coreutils@/bin/id -u)" | @coreutils@/bin/cut -d: -f6)"
-[ -n "$pwhome" ] || refuse "cannot resolve this account's home from passwd"
+# A uid passwd cannot resolve (container --user, sssd/LDAP the nix glibc cannot load) only
+# matters inside a local-only session; anywhere else it just means no passwd candidate.
+[ -n "$pwhome" ] || [ "$sticky" = 0 ] || refuse "cannot resolve this account's home from passwd"
 gate=""
 for root in "${CLAUDE_CONFIG_DIR:-}" "${pwhome:+$pwhome/.claude}"; do
   if [ -n "$root" ] && [ -f "$root/LIFEOS/TOOLS/InferenceProvider.ts" ]; then
@@ -26,7 +28,7 @@ done
 if [ -z "$gate" ]; then
   [ "$sticky" = 1 ] && refuse "local-only session but the inference gate is missing"
   # No gate, but a config that names local-only (e.g. payload not yet synced): refuse.
-  @gnugrep@/bin/grep -qs 'local-only' "$pwhome/.claude/LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml" \
+  [ -n "$pwhome" ] && @gnugrep@/bin/grep -qs 'local-only' "$pwhome/.claude/LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml" \
     && refuse "LIFEOS_CONFIG.toml mentions local-only but the inference gate is missing"
   exec "$real" "$@"
 fi

@@ -44,10 +44,22 @@ sed -e "s|@bash@|$(dirname "$(dirname "$(command -v bash)")")|g" \
     -e "s|@gnugrep@|$(dirname "$(dirname "$(command -v grep)")")|g" \
     "$REPO/pkgs/tools/misc/claude-code/claude-gate.sh" > "$TREE/home/bin/claude"
 chmod +x "$TREE/home/bin/claude"
+# A second copy whose getent resolves nothing (uid unknown to passwd).
+mkdir -p "$TREE/nopw/bin" "$TREE/nopw-gate"
+printf '#!/bin/sh\nexit 2\n' > "$TREE/nopw/bin/getent"; chmod +x "$TREE/nopw/bin/getent"
+sed -e "s|@bash@|$(dirname "$(dirname "$(command -v bash)")")|g" \
+    -e "s|@bun@|$(dirname "$(dirname "$(command -v bun)")")|g" \
+    -e "s|@real@|$TREE/real/claude|g" \
+    -e "s|@getent@|$TREE/nopw|g" \
+    -e "s|@coreutils@|$(dirname "$(dirname "$(command -v id)")")|g" \
+    -e "s|@gnugrep@|$(dirname "$(dirname "$(command -v grep)")")|g" \
+    "$REPO/pkgs/tools/misc/claude-code/claude-gate.sh" > "$TREE/nopw-gate/claude"
+chmod +x "$TREE/nopw-gate/claude"
 
 cd "$ROOT/LIFEOS/TOOLS"
 # Scrub provider vars from the outer shell so the anthropic-only assertions see only what
 # the code under test sets.
 env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u CLAUDECODE \
   -u LIFEOS_INFERENCE_MODE -u LIFEOS_INFERENCE_TARGET -u LIFEOS_GATE -u XDG_RUNTIME_DIR \
-  HOME="$TREE/home" CLAUDE_CONFIG_DIR="$ROOT" PATH="$TREE/home/bin:$PATH" bun test InferenceProvider.test.ts
+  HOME="$TREE/home" CLAUDE_CONFIG_DIR="$ROOT" NOPW_GATE="$TREE/nopw-gate/claude" PATH="$TREE/home/bin:$PATH" \
+  bun test InferenceProvider.test.ts
