@@ -380,6 +380,19 @@ test("gate: `claude update` refuses under local-only", async () => {
   expect(spawns().length).toBe(0);
 });
 
+test("gate: fast path — no [inference] anywhere means the gate never runs", async () => {
+  config(null);
+  const stale = join(HOME, "stale-fast");
+  mkdirSync(join(stale, "LIFEOS/TOOLS"), { recursive: true });
+  writeFileSync(join(stale, "LIFEOS/TOOLS/InferenceProvider.ts"), "process.exit(9);\n"); // would refuse if run
+  const r = await claude({ CLAUDE_CONFIG_DIR: stale });
+  expect(r.code).toBe(0);
+  expect(r.spawns.length).toBe(1);
+  // …but a local parent, or the marker, still takes the full gate.
+  const viaParent = await claude({ CLAUDE_CONFIG_DIR: stale, LIFEOS_INFERENCE_LOCAL: "1" });
+  expect(viaParent.code).toBe(3);
+});
+
 test("gate: a stale payload whose gate does not speak the protocol refuses", async () => {
   config("local-only");
   const stale = join(HOME, "stale-lifeos");

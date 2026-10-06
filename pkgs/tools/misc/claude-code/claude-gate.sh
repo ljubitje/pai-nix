@@ -19,6 +19,15 @@ pwhome="$(@getent@/bin/getent passwd "$(@coreutils@/bin/id -u)" | @coreutils@/bi
 # A uid passwd cannot resolve (container --user, sssd/LDAP the nix glibc cannot load) only
 # matters inside a local-only session; anywhere else it just means no passwd candidate.
 [ -n "$pwhome" ] || [ "$sticky" = 0 ] || refuse "cannot resolve this account's home from passwd"
+# Fast path: outside a local session, a config that never mentions inference is
+# anthropic-only, so exec straight away, without a bun start and a TOML parse per claude
+# (review 4). Any mention, a local parent, or the marker takes the full gate below.
+if [ "$sticky" = 0 ] && [ -z "${LIFEOS_INFERENCE_LOCAL:-}" ] \
+   && ! @gnugrep@/bin/grep -qs 'inference' "${LIFEOS_CONFIG_PATH:-${HOME:-$pwhome}/.claude/LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml}" \
+   && { [ -z "$pwhome" ] || ! @gnugrep@/bin/grep -qs 'inference' "$pwhome/.claude/LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml"; }; then
+  exec "$real" "$@"
+fi
+
 gate=""
 for root in "${CLAUDE_CONFIG_DIR:-}" "${pwhome:+$pwhome/.claude}"; do
   if [ -n "$root" ] && [ -f "$root/LIFEOS/TOOLS/InferenceProvider.ts" ]; then
