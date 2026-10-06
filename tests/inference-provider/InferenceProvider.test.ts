@@ -480,6 +480,22 @@ test("inference, local fails: one Anthropic retry with every local variable stri
   }
 });
 
+test("inference, server down (health): straight to Anthropic, no local attempt", async () => {
+  config("local-with-fallback");
+  serverUp = false;
+  process.env.FAKE_LOCAL_FAIL = "0";
+  try {
+    const r = await infer();
+    const s = spawns();
+    expect(r.provider).toBe("anthropic");
+    expect(s.length).toBe(1);
+    expect(s[0].env.ANTHROPIC_BASE_URL).toBeUndefined();
+    expect(events()).toEqual(["fallback"]);
+  } finally {
+    serverUp = true;
+  }
+});
+
 test("inference, local-only fails: error, Anthropic never spawned", async () => {
   config("local-only");
   process.env.FAKE_LOCAL_FAIL = "1";

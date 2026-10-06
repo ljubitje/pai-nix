@@ -76,14 +76,14 @@ VERIFICATION
   fake claude and an up/down fake server, Inference.ts through the gate. 25 mutations killed.
 
 diff --git a/LifeOS/install/LIFEOS/TOOLS/Inference.ts b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
-index b0408f9..7f068ce 100755
+index b0408f9..394b432 100755
 --- a/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 @@ -51,6 +51,7 @@ import { join } from "path";
  import { homedir, tmpdir } from "os";
  import { randomUUID } from "crypto";
  import { modelForEffort, pinnedModelForEffort, EFFORT_MODEL, UNIFORM_HARNESS_EFFORT, type EffortLevel, type HarnessEffort } from './models';
-+import { anthropicEnv, loadProviderConfig, localEnv, localModelFor, recordProviderEvent, TARGET_HINT, type ProviderConfig } from './InferenceProvider';
++import { anthropicEnv, loadProviderConfig, localEnv, localHealthy, localModelFor, recordProviderEvent, TARGET_HINT, type ProviderConfig } from './InferenceProvider';
  
  /**
   * Resolve the claude binary explicitly. launchd jobs run with a minimal PATH
@@ -164,7 +164,7 @@ index b0408f9..7f068ce 100755
        const { executed: executedModel, downgraded: modelDowngraded } = verifyExecutedModel(envelope.modelUsage, expectedTier);
        if (executedModel && (modelDowngraded || level === 'max')) {
          logModelVerification({ level, requested: model, expected_tier: expectedTier, executed: executedModel, downgraded: !!modelDowngraded, latency_ms: latencyMs });
-@@ -488,11 +519,35 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -488,11 +519,43 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
   * observability.
   */
  export async function inference(options: InferenceOptions): Promise<InferenceResult> {
@@ -180,6 +180,14 @@ index b0408f9..7f068ce 100755
 +    return { success: false, output: '', error, latencyMs: 0, level: normalizeLevel(options.level) };
 +  }
 +  if (provider.mode === 'anthropic-only') return inferenceOnTarget(options);
++
++  // A down server is known from the 30 s health cache; spending the caller's whole timeout on
++  // a local attempt first would leave the Anthropic leg no budget (review 4).
++  if (provider.mode === 'local-with-fallback' && !(await localHealthy(provider))) {
++    recordProviderEvent({ event: 'fallback', surface: 'inference', level: normalizeLevel(options.level), error: 'local server not answering (health)' });
++    const anthropic = await inferenceOnTarget(options, 'anthropic');
++    return { ...anthropic, provider: 'anthropic', fallbackFrom: 'local server not answering' };
++  }
 +
 +  const local = await inferenceOnTarget(options, provider);
 +  if (local.success || provider.mode === 'local-only') return { ...local, provider: 'local' };
@@ -201,7 +209,7 @@ index b0408f9..7f068ce 100755
    if (first.success || level !== 'max') return first;
    // The fallback only buys resilience if it resolves to a DIFFERENT model than
    // the one that just failed. Compare at the TIER level (EFFORT_MODEL), not the
-@@ -507,13 +562,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
+@@ -507,13 +570,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
      EFFORT_MODEL.high !== EFFORT_MODEL.max ? 'high'
      : EFFORT_MODEL.medium !== EFFORT_MODEL.max ? 'medium'
      : 'low';
@@ -221,7 +229,7 @@ index b0408f9..7f068ce 100755
  }
  
  
-@@ -570,6 +630,9 @@ async function main() {
+@@ -570,6 +638,9 @@ async function main() {
    if (result.executedModel) {
      console.error(`[model] requested=${level} → executed=${result.executedModel}${result.modelDowngraded ? '  ⚠️ DOWNGRADED from requested tier' : ''}`);
    }
