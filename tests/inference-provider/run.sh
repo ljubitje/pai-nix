@@ -1,21 +1,26 @@
 #!/usr/bin/env bash
-# Materialise the patched TOOLS tree in a temp dir and run the InferenceProvider suite.
-# The files under test exist only inside f-inference-provider.patch until a build applies
-# it, so this is that build in miniature: live TOOLS (== patched baseline) + this patch.
+# Materialise the patched payload in a temp dir and run the InferenceProvider suite against it,
+# through the real claude-gate.sh. The files under test exist only inside the patches until a
+# build applies them, so this is that build in miniature.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-PATCH="$REPO/pkgs/tools/misc/lifeos/patches/f-inference-provider.patch"
-SRC="${LIFEOS_LIVE:-$HOME/.claude}"
+
+# Baseline = the pinned upstream source plus the package's own patch list, in order, exactly
+# as the derivation applies it. Never the live ~/.claude: after a deploy it already carries
+# this patch, and `patch --forward` would then abort the suite (review 4).
+SRC="$(nix eval --raw "$REPO#lifeos.src")"
+nix build --no-link "$SRC" >/dev/null 2>&1 || nix-store --realise "$SRC" >/dev/null
 
 TREE="$(mktemp -d)"; trap 'rm -rf "${TREE:?}"' EXIT
 ROOT="$TREE/LifeOS/install"
-mkdir -p "$ROOT/LIFEOS/TOOLS" "$TREE/home/bin"
-cp -r "$SRC/LIFEOS/TOOLS/." "$ROOT/LIFEOS/TOOLS/"
+cp -r "$SRC/." "$TREE/"
 chmod -R u+w "$TREE"
-# A live tree that already carries a dev copy of the new file would half-apply.
-rm -f "$ROOT/LIFEOS/TOOLS/InferenceProvider.ts"
-( cd "$TREE" && patch -p1 --silent --batch --forward -i "$PATCH" )
+mkdir -p "$TREE/home/bin"
+( cd "$TREE"
+  awk '/^  patches = \[/{f=1;next} f&&/^  \];/{f=0} f' "$REPO/pkgs/tools/misc/lifeos/default.nix" \
+    | rg -o '\./patches/[^ ]+\.patch' \
+    | while read -r p; do patch -p1 --silent --batch --forward -i "$REPO/pkgs/tools/misc/lifeos/$p"; done )
 cp "$HERE/InferenceProvider.test.ts" "$ROOT/LIFEOS/TOOLS/"
 
 # Fake real claude: records argv model + the provider-relevant env of every exec, fails when

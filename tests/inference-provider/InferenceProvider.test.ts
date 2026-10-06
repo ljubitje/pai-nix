@@ -436,7 +436,10 @@ test("gate: a uid passwd cannot resolve runs claude, unless inside a local-only 
 });
 
 test("gate: missing gate file + local-only marker refuses", async () => {
-  const r = await claude({ CLAUDE_CONFIG_DIR: join(HOME, "no-lifeos"), LIFEOS_INFERENCE_MODE: "local-only" });
+  // The gate also looks in the passwd home (the real one, outside this sandbox). Pointing the
+  // config at nothing makes the outcome the same either way: refuse.
+  const r = await claude({ CLAUDE_CONFIG_DIR: join(HOME, "no-lifeos"), LIFEOS_INFERENCE_MODE: "local-only",
+    LIFEOS_CONFIG_PATH: join(HOME, "missing.toml") });
   expect(r.code).toBe(3);
   expect(r.spawns.length).toBe(0);
 });
