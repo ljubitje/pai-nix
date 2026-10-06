@@ -9,6 +9,9 @@
   stdenvNoCC,
   bash,
   bun,
+  coreutils,
+  getent,
+  gnugrep,
   fetchurl,
   installShellFiles,
   makeBinaryWrapper,
@@ -93,6 +96,9 @@ stdenv.mkDerivation (finalAttrs: {
     substitute ${./claude-gate.sh} $out/bin/claude \
       --subst-var-by bash ${bash} \
       --subst-var-by bun ${bun} \
+      --subst-var-by coreutils ${coreutils} \
+      --subst-var-by getent ${getent} \
+      --subst-var-by gnugrep ${gnugrep} \
       --subst-var-by real $out/libexec/claude-code/claude
     chmod 0755 $out/bin/claude
 

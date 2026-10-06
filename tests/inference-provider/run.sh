@@ -36,9 +36,12 @@ console.log(JSON.stringify({ result: "ok", modelUsage: { [model]: { outputTokens
 FAKE
 chmod +x "$TREE/real/claude"
 # The gate exactly as the claude-code derivation installs it, pointed at the fake.
-sed -e "s|@bash@|$(dirname "$(dirname "$(command -v bash)")")|" \
-    -e "s|@bun@|$(dirname "$(dirname "$(command -v bun)")")|" \
-    -e "s|@real@|$TREE/real/claude|" \
+sed -e "s|@bash@|$(dirname "$(dirname "$(command -v bash)")")|g" \
+    -e "s|@bun@|$(dirname "$(dirname "$(command -v bun)")")|g" \
+    -e "s|@real@|$TREE/real/claude|g" \
+    -e "s|@getent@|$(dirname "$(dirname "$(command -v getent)")")|g" \
+    -e "s|@coreutils@|$(dirname "$(dirname "$(command -v id)")")|g" \
+    -e "s|@gnugrep@|$(dirname "$(dirname "$(command -v grep)")")|g" \
     "$REPO/pkgs/tools/misc/claude-code/claude-gate.sh" > "$TREE/home/bin/claude"
 chmod +x "$TREE/home/bin/claude"
 

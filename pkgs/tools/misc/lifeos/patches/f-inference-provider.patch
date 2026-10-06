@@ -46,6 +46,14 @@ FIX
   whose env re-routes claude refuse; base_url is parsed (no userinfo, no Anthropic host);
   Bedrock/Vertex/Foundry routing is switched off on the local target; the user's own values
   are saved and restored on the Anthropic path; health is cached 30 s per base_url.
+  Third review (2026-10-06) closed: getent/id/cut/grep come from store paths (Pulse's unit
+  PATH had no getent, which left every Pulse spawn ungated), a passwd lookup failure refuses,
+  trailing-dot Anthropic hosts are refused, local-only never stores the user's API key in the
+  session env, a subcommand is caught anywhere in argv (not only as the first positional),
+  and the env delta is dry-run under set -e before it is applied. Known open (accepted for
+  now, Klemen 2026-10-06): config read from $HOME/LIFEOS_CONFIG_PATH, more cloud providers
+  than the four listed, the --settings flag, a CLAUDE_CONFIG_DIR stub gate. The network block
+  and a non-Anthropic agent for local-only are the next step, not more blocklist.
   Not covered here: the Agent SDK runs its own bundled binary, not the wrapper — its users
   (Siri, iMessage) are retired/disabled (f-siri-retire); a network-level block is ISA Step 7c.
 
@@ -60,10 +68,10 @@ SCOPE / CO-EXISTENCE
   longer touched: the gate in the claude wrapper covers it.
 
 VERIFICATION
-  tests/inference-provider/run.sh — 62 tests: resolution and refusals, sticky local-only, env
+  tests/inference-provider/run.sh — 66 tests: resolution and refusals, sticky local-only, env
   overlay/strip/restore, the decide() table, the real gate script end to end (bunfig preload,
   stale payload, settings re-route, subcommands, GATE=off, health cache) against a recording
-  fake claude and an up/down fake server, Inference.ts through the gate. 17 mutations killed.
+  fake claude and an up/down fake server, Inference.ts through the gate. 21 mutations killed.
 
 diff --git a/LifeOS/install/LIFEOS/TOOLS/Inference.ts b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 index b0408f9..b46ed52 100755
@@ -215,10 +223,10 @@ index b0408f9..b46ed52 100755
      if (expectJson && result.parsed) {
 diff --git a/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
 new file mode 100644
-index 0000000..9e355ad
+index 0000000..dd2df26
 --- /dev/null
 +++ b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
-@@ -0,0 +1,439 @@
+@@ -0,0 +1,445 @@
 +#!/usr/bin/env bun
 +/**
 + * InferenceProvider.ts — which model server `claude` talks to, decided at every exec.
@@ -356,7 +364,8 @@ index 0000000..9e355ad
 +  if (!/^https?:$/.test(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) {
 +    throw new Error(`[inference.local] base_url must be a plain http(s) URL (no user, query or fragment) in ${where}`);
 +  }
-+  if (isAnthropicHost(url.hostname.toLowerCase())) {
++  // Trailing dots name the same host ("api.anthropic.com." resolves to Anthropic; review 3).
++  if (isAnthropicHost(url.hostname.toLowerCase().replace(/\.+$/, ""))) {
 +    throw new Error(`[inference.local] base_url points at Anthropic (${url.hostname}) in ${where}`);
 +  }
 +  const overrides = (l.models ?? {}) as Record<string, unknown>;
@@ -423,8 +432,10 @@ index 0000000..9e355ad
 +  if (!cfg.local) throw new Error("localEnv: no [inference.local] configured");
 +  const { local } = cfg;
 +  const env = { ...base };
-+  // Remember what the overlay replaces, once, so the Anthropic path can give it back.
-+  if (!base[APPLIED_MARKER]) {
++  // Remember what the overlay replaces, once, so the Anthropic path can give it back. Never
++  // under local-only: there is no Anthropic path, and a saved API key would ride the env of
++  // every process in the session (review 3).
++  if (!base[APPLIED_MARKER] && cfg.mode !== "local-only") {
 +    const saved: Record<string, string> = {};
 +    for (const k of LOCAL_KEYS) if (base[k] !== undefined) saved[k] = base[k]!;
 +    if (base.ANTHROPIC_API_KEY !== undefined) saved.ANTHROPIC_API_KEY = base.ANTHROPIC_API_KEY;
@@ -582,8 +593,11 @@ index 0000000..9e355ad
 +  if (cfg.mode === "anthropic-only") return { action: "exec", env: anthropicEnv(clean) };
 +  if (cfg.mode === "local-only") {
 +    if (hint === "anthropic") return { action: "refuse", reason: "inference mode is local-only — Anthropic is not allowed" };
-+    const sub = argv.find((a) => !a.startsWith("-"));
-+    if (sub && (ANTHROPIC_SUBCOMMANDS as readonly string[]).includes(sub)) {
++    // Any token, not just the first positional: `claude --model x update` still dispatches
++    // update (review 3). A prompt right after -p/--print is text, not a subcommand.
++    const sub = argv.find((a, i) =>
++      (ANTHROPIC_SUBCOMMANDS as readonly string[]).includes(a) && argv[i - 1] !== "-p" && argv[i - 1] !== "--print");
++    if (sub) {
 +      return { action: "refuse", reason: `"claude ${sub}" talks to Anthropic — not allowed under local-only` };
 +    }
 +    const hits = overrides();

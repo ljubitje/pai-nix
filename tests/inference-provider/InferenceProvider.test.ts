@@ -54,6 +54,7 @@ test.each([
   [{ mode: "local-only", local: { base_url: "http://x@api.anthropic.com", model: "m" } }, /plain http/],
   [{ mode: "local-only", local: { base_url: "https://api.anthropic.com", model: "m" } }, /points at Anthropic/],
   [{ mode: "local-only", local: { base_url: "https://foo.claude.ai/v1", model: "m" } }, /points at Anthropic/],
+  [{ mode: "local-only", local: { base_url: "https://api.anthropic.com./", model: "m" } }, /points at Anthropic/],
 ])("invalid section refuses loudly: %j", (raw, msg) => {
   expect(() => resolveProviderConfig(raw, "/cfg.toml")).toThrow(msg);
   expect(() => resolveProviderConfig(raw, "/cfg.toml")).toThrow(/\/cfg\.toml/);
@@ -111,6 +112,13 @@ test("local-only adds the marker and turns off nonessential traffic, WebFetch, c
   expect(env.ENABLE_CLAUDEAI_MCP_SERVERS).toBe("false");
 });
 
+test("local-only never stores the user's API key in the session env", () => {
+  const env = localEnv({ ANTHROPIC_API_KEY: "sk-ant-x" }, resolveProviderConfig({ ...LOCAL, mode: "local-only" }));
+  expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  expect(env.LIFEOS_INFERENCE_SAVED).toBeUndefined();
+  expect(JSON.stringify(env)).not.toContain("sk-ant-x");
+});
+
 test("anthropicEnv strips exactly what localEnv added, and nothing when it added nothing", () => {
   const local = localEnv({ KEEP: "1" }, resolveProviderConfig(LOCAL));
   expect(anthropicEnv(local)).toEqual({ KEEP: "1" });
@@ -164,6 +172,11 @@ test.each([
 test.each(["update", "install", "setup-token", "login", "auth"])("decide: local-only refuses `claude %s`", async (sub) => {
   const d = await decide({}, cfgOf("local-only"), up, ["--verbose", sub]);
   expect(d.action).toBe("refuse");
+});
+
+test("decide: a subcommand behind a flag value is still caught; a -p prompt is not a subcommand", async () => {
+  expect((await decide({}, cfgOf("local-only"), up, ["--model", "x", "update"])).action).toBe("refuse");
+  expect((await decide({}, cfgOf("local-only"), up, ["-p", "update"])).action).toBe("exec");
 });
 
 test("decide: local-only refuses when settings would re-route; fallback mode does not check", async () => {
@@ -345,6 +358,14 @@ test("gate: a down server is probed once per cache window, not once per exec", a
   expect(cached.spawns[0].env.ANTHROPIC_BASE_URL).toBeUndefined(); // still the cached "down"
   const fresh = await claude({ XDG_RUNTIME_DIR: undefined });
   expect(fresh.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
+});
+
+test("gate: works with a PATH that has no getent (Pulse's unit PATH)", async () => {
+  config("local-only");
+  const path = [GATE.replace(/\/claude$/, ""), Bun.which("bun")!.replace(/\/bun$/, "")].join(":");
+  const r = await claude({ PATH: path });
+  expect(r.code).toBe(0);
+  expect(r.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
 });
 
 test("gate: missing gate file + local-only marker refuses", async () => {
