@@ -127,9 +127,11 @@ test("local-only never stores the user's API key in the session env", () => {
   expect(env.LIFEOS_INFERENCE_SAVED).toBeUndefined();
   expect(JSON.stringify(env)).not.toContain("sk-ant-x");
   // …nor when the record was inherited from a local-with-fallback parent.
-  const parent = localEnv({ ANTHROPIC_API_KEY: "sk-ant-x" }, resolveProviderConfig(LOCAL));
-  expect(parent.LIFEOS_INFERENCE_SAVED).toContain("sk-ant-x"); // positive control
+  const parent = localEnv({ ANTHROPIC_API_KEY: "sk-ant-x", ANTHROPIC_BASE_URL: "https://corp-proxy" }, resolveProviderConfig(LOCAL));
+  expect(parent.LIFEOS_INFERENCE_SAVED).toContain("corp-proxy"); // positive control: a record exists
+  expect(parent.LIFEOS_INFERENCE_SAVED).not.toContain("sk-ant-x"); // but never a credential
   const child = localEnv(parent, resolveProviderConfig({ ...LOCAL, mode: "local-only" }));
+  expect(child.LIFEOS_INFERENCE_SAVED).toBeUndefined();
   expect(JSON.stringify(child)).not.toContain("sk-ant-x");
 });
 
@@ -150,7 +152,8 @@ test("the user's own routing and privacy settings survive a local → Anthropic 
   expect(local.ANTHROPIC_API_KEY).toBeUndefined();
   expect(local.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe("1"); // opt-out kept on local too
   const nested = localEnv(local, resolveProviderConfig(LOCAL)); // a local child of a local session
-  expect(anthropicEnv(nested)).toEqual(user);
+  const { ANTHROPIC_API_KEY: _key, ...withoutKey } = user;
+  expect(anthropicEnv(nested)).toEqual(withoutKey); // credentials are never restored
 });
 
 test("envDiffShell round-trips through bash, including quotes", async () => {
@@ -460,7 +463,8 @@ test("inference, local fails: one Anthropic retry with every local variable stri
   config("local-with-fallback");
   process.env.FAKE_LOCAL_FAIL = "1";
   // Simulate running inside a local interactive session: inherited local variables.
-  const inherited = localEnv({}, resolveProviderConfig({ ...LOCAL, local: { ...LOCAL.local, base_url: base() } }));
+  const inherited = localEnv({ ANTHROPIC_API_KEY: "sk-ant-own", ANTHROPIC_BASE_URL: "https://corp-proxy" },
+    resolveProviderConfig({ ...LOCAL, local: { ...LOCAL.local, base_url: base() } }));
   Object.assign(process.env, inherited);
   try {
     const r = await infer();

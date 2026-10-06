@@ -76,7 +76,7 @@ VERIFICATION
   fake claude and an up/down fake server, Inference.ts through the gate. 25 mutations killed.
 
 diff --git a/LifeOS/install/LIFEOS/TOOLS/Inference.ts b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
-index b0408f9..b46ed52 100755
+index b0408f9..7f068ce 100755
 --- a/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 @@ -51,6 +51,7 @@ import { join } from "path";
@@ -99,12 +99,22 @@ index b0408f9..b46ed52 100755
  }
  
  // Level configurations — models resolve via models.ts EFFORT_MODEL (the single
-@@ -202,12 +208,18 @@ function logModelVerification(entry: Record<string, unknown>): void {
+@@ -202,12 +208,28 @@ function logModelVerification(entry: Record<string, unknown>): void {
  /**
   * Run inference with configurable level
   */
 -async function inferenceAttempt(options: InferenceOptions, modelOverride?: string): Promise<InferenceResult> {
 +type Target = ProviderConfig | 'anthropic' | undefined;
++
++/** The upstream scrub again, after anthropicEnv() may have restored a saved BASE_URL: the
++ * Anthropic leg always runs on the subscription, never on a key or a proxy. */
++function scrubbed(env: Record<string, string | undefined>): Record<string, string | undefined> {
++  const out = { ...env };
++  delete out.ANTHROPIC_API_KEY;
++  delete out.ANTHROPIC_AUTH_TOKEN;
++  delete out.ANTHROPIC_BASE_URL;
++  return out;
++}
 +
 +async function inferenceAttempt(options: InferenceOptions, modelOverride?: string, target?: Target): Promise<InferenceResult> {
 +  const local = typeof target === 'object' ? target : undefined;
@@ -120,7 +130,7 @@ index b0408f9..b46ed52 100755
  
    return new Promise((resolve) => {
      // Unset CLAUDECODE so nested `claude` invocations don't trigger the
-@@ -231,6 +243,16 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -231,6 +253,14 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
      // still be targeted after the child loses its credentials above, so every
      // nested call fails auth (401) and retries until timeout. Force real Anthropic API.
      delete env.ANTHROPIC_BASE_URL;
@@ -131,13 +141,11 @@ index b0408f9..b46ed52 100755
 +    // byte-identical to upstream.
 +    const spawnEnv = local
 +      ? { ...localEnv(env, local), [TARGET_HINT]: 'local' }
-+      : target === 'anthropic'
-+        ? { ...anthropicEnv(env), [TARGET_HINT]: 'anthropic' }
-+        : anthropicEnv(env);
++      : { ...scrubbed(anthropicEnv(env)), ...(target === 'anthropic' ? { [TARGET_HINT]: 'anthropic' } : {}) };
  
      const hasImages = options.imagePaths && options.imagePaths.length > 0;
  
-@@ -273,7 +295,7 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -273,7 +303,7 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
      let stderr = '';
  
      const proc = spawn(resolveClaudeBin(), args, {
@@ -146,7 +154,7 @@ index b0408f9..b46ed52 100755
        stdio: ['pipe', 'pipe', 'pipe'],
      });
  
-@@ -362,7 +384,8 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -362,7 +392,8 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
        // any silent downgrade. A `max` call that runs Opus instead of Fable is
        // caught HERE instead of being reported as Fable. Logged for max (Fable
        // audit trail) and for any downgrade at any level.
@@ -156,7 +164,7 @@ index b0408f9..b46ed52 100755
        const { executed: executedModel, downgraded: modelDowngraded } = verifyExecutedModel(envelope.modelUsage, expectedTier);
        if (executedModel && (modelDowngraded || level === 'max')) {
          logModelVerification({ level, requested: model, expected_tier: expectedTier, executed: executedModel, downgraded: !!modelDowngraded, latency_ms: latencyMs });
-@@ -488,11 +511,35 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -488,11 +519,35 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
   * observability.
   */
  export async function inference(options: InferenceOptions): Promise<InferenceResult> {
@@ -193,7 +201,7 @@ index b0408f9..b46ed52 100755
    if (first.success || level !== 'max') return first;
    // The fallback only buys resilience if it resolves to a DIFFERENT model than
    // the one that just failed. Compare at the TIER level (EFFORT_MODEL), not the
-@@ -507,13 +554,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
+@@ -507,13 +562,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
      EFFORT_MODEL.high !== EFFORT_MODEL.max ? 'high'
      : EFFORT_MODEL.medium !== EFFORT_MODEL.max ? 'medium'
      : 'low';
@@ -213,7 +221,7 @@ index b0408f9..b46ed52 100755
  }
  
  
-@@ -570,6 +622,9 @@ async function main() {
+@@ -570,6 +630,9 @@ async function main() {
    if (result.executedModel) {
      console.error(`[model] requested=${level} → executed=${result.executedModel}${result.modelDowngraded ? '  ⚠️ DOWNGRADED from requested tier' : ''}`);
    }
@@ -225,10 +233,10 @@ index b0408f9..b46ed52 100755
      if (expectJson && result.parsed) {
 diff --git a/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
 new file mode 100644
-index 0000000..589c423
+index 0000000..f1c4130
 --- /dev/null
 +++ b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
-@@ -0,0 +1,482 @@
+@@ -0,0 +1,483 @@
 +#!/usr/bin/env bun
 +/**
 + * InferenceProvider.ts — which model server `claude` talks to, decided at every exec.
@@ -455,9 +463,10 @@ index 0000000..589c423
 +  // under local-only: there is no Anthropic path, and a saved API key would ride the env of
 +  // every process in the session (review 3).
 +  if (!base[APPLIED_MARKER] && cfg.mode !== "local-only") {
++    // Routing and privacy values only, never credentials: restoring a key would move
++    // subscription work onto API billing, which upstream scrubs on purpose (review 4).
 +    const saved: Record<string, string> = {};
-+    for (const k of LOCAL_KEYS) if (base[k] !== undefined) saved[k] = base[k]!;
-+    if (base.ANTHROPIC_API_KEY !== undefined) saved.ANTHROPIC_API_KEY = base.ANTHROPIC_API_KEY;
++    for (const k of LOCAL_KEYS) if (base[k] !== undefined && k !== "ANTHROPIC_AUTH_TOKEN") saved[k] = base[k]!;
 +    if (Object.keys(saved).length) env[SAVED_MARKER] = JSON.stringify(saved);
 +  }
 +  // Routing keys are replaced; the user's own privacy opt-outs stay as they are.
