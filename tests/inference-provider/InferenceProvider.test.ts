@@ -81,6 +81,15 @@ test("no config file → anthropic-only, but with the local-only marker → refu
   expect(() => loadProviderConfig({ LIFEOS_INFERENCE_MODE: "local-only" })).toThrow(/not readable/);
 });
 
+test("a TOML error elsewhere stays anthropic-only; near [inference], or in a local-only session, it refuses", () => {
+  process.env.LIFEOS_CONFIG_PATH = CFG;
+  writeFileSync(CFG, '[principal]\nname = "Klemen\n');            // unterminated string
+  expect(loadProviderConfig({ LIFEOS_CONFIG_PATH: CFG })).toEqual(ANTHROPIC_ONLY);
+  expect(() => loadProviderConfig({ LIFEOS_CONFIG_PATH: CFG, LIFEOS_INFERENCE_MODE: "local-only" })).toThrow();
+  writeFileSync(CFG, '[inference]\nmode = "local-only\n');
+  expect(() => loadProviderConfig({ LIFEOS_CONFIG_PATH: CFG })).toThrow();
+});
+
 test("marker overrides a config that now says something else; no local table → refuses", () => {
   writeFileSync(CFG, `[inference]\nmode = "local-with-fallback"\n[inference.local]\nbase_url = "http://x"\nmodel = "m"\n`);
   process.env.LIFEOS_CONFIG_PATH = CFG;
