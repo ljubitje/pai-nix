@@ -52,7 +52,15 @@ FIX
   session env, a subcommand is caught anywhere in argv (not only as the first positional),
   and the env delta is dry-run under set -e before it is applied (on its own line: left of
   `||` bash ignores set -e). An inherited saved-values record is dropped under local-only;
-  print mode (-p/--print) never counts as a subcommand. Known open (accepted for
+  print mode (-p/--print) never counts as a subcommand (superseded by review 4, below).
+  Fourth review (2026-10-06) closed: no print-mode exemption ("-p" can be a flag value) and
+  Anthropic-cloud entry points (ultrareview, remote-control, --cloud/--environment/--teleport/
+  --remote-control/--from-pr/--desktop) refused under local-only; the settings scan covers the
+  privacy keys, $CLAUDE_CONFIG_DIR and managed settings; an unresolvable passwd home refuses
+  only inside local-only; a TOML error in a file that never mentions inference is
+  anthropic-only with a warning; credentials are never saved or restored, and the Anthropic
+  leg is re-scrubbed; Inference.ts checks cached local health before the local attempt; the
+  claude wrapper takes a fast path when no config mentions inference. Known open (accepted for
   now, Klemen 2026-10-06): config read from $HOME/LIFEOS_CONFIG_PATH, more cloud providers
   than the four listed, the --settings flag, a CLAUDE_CONFIG_DIR stub gate. The network block
   and a non-Anthropic agent for local-only are the next step, not more blocklist.
@@ -70,10 +78,10 @@ SCOPE / CO-EXISTENCE
   longer touched: the gate in the claude wrapper covers it.
 
 VERIFICATION
-  tests/inference-provider/run.sh — 67 tests: resolution and refusals, sticky local-only, env
+  tests/inference-provider/run.sh — 80 tests: resolution and refusals, sticky local-only, env
   overlay/strip/restore, the decide() table, the real gate script end to end (bunfig preload,
   stale payload, settings re-route, subcommands, GATE=off, health cache) against a recording
-  fake claude and an up/down fake server, Inference.ts through the gate. 25 mutations killed.
+  fake claude and an up/down fake server, Inference.ts through the gate. 36 mutations killed.
 
 diff --git a/LifeOS/install/LIFEOS/TOOLS/Inference.ts b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 index b0408f9..394b432 100755
