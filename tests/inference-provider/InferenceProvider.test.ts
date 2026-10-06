@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import {
   ANTHROPIC_ONLY, anthropicEnv, decide, envDiffShell, localEnv, localModelFor,
-  loadProviderConfig, resolveProviderConfig, tierOf, type ProviderConfig,
+  loadProviderConfig, resolveProviderConfig, settingsRoutingOverrides, tierOf, type ProviderConfig,
 } from "./InferenceProvider";
 
 // Runs inside a materialised payload (see run.sh). PATH starts with the REAL lifeos-nix gate
@@ -344,6 +344,20 @@ test("gate: project settings that re-route claude refuse under local-only", asyn
   expect(r.code).toBe(3);
   expect(r.stderr).toMatch(/re-route/);
   expect(r.spawns.length).toBe(0);
+});
+
+test("settings scan: privacy keys switched back off are hits, kept on are not; CLAUDE_CONFIG_DIR is read", () => {
+  const root = join(HOME, "scan");
+  mkdirSync(join(root, "proj", ".claude"), { recursive: true });
+  mkdirSync(join(root, "cfgdir"), { recursive: true });
+  writeFileSync(join(root, "proj", ".claude", "settings.json"), JSON.stringify({ env: {
+    CLAUDE_CODE_DISABLE_WEB_FETCH: "0", ENABLE_CLAUDEAI_MCP_SERVERS: "true", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } }));
+  writeFileSync(join(root, "cfgdir", "settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://gw.example" } }));
+  const hits = settingsRoutingOverrides(join(root, "proj"), join(root, "nohome"), join(root, "cfgdir"));
+  expect(hits.some((h) => h.includes("CLAUDE_CODE_DISABLE_WEB_FETCH=0"))).toBe(true);
+  expect(hits.some((h) => h.includes("ENABLE_CLAUDEAI_MCP_SERVERS=true"))).toBe(true);
+  expect(hits.some((h) => h.includes("NONESSENTIAL"))).toBe(false); // kept on: fine
+  expect(hits.some((h) => h.includes("cfgdir") && h.includes("ANTHROPIC_BASE_URL"))).toBe(true);
 });
 
 test("gate: `claude update` refuses under local-only", async () => {
