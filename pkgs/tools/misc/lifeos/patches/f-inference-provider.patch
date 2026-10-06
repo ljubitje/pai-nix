@@ -50,7 +50,9 @@ FIX
   PATH had no getent, which left every Pulse spawn ungated), a passwd lookup failure refuses,
   trailing-dot Anthropic hosts are refused, local-only never stores the user's API key in the
   session env, a subcommand is caught anywhere in argv (not only as the first positional),
-  and the env delta is dry-run under set -e before it is applied. Known open (accepted for
+  and the env delta is dry-run under set -e before it is applied (on its own line: left of
+  `||` bash ignores set -e). An inherited saved-values record is dropped under local-only;
+  print mode (-p/--print) never counts as a subcommand. Known open (accepted for
   now, Klemen 2026-10-06): config read from $HOME/LIFEOS_CONFIG_PATH, more cloud providers
   than the four listed, the --settings flag, a CLAUDE_CONFIG_DIR stub gate. The network block
   and a non-Anthropic agent for local-only are the next step, not more blocklist.
@@ -68,10 +70,10 @@ SCOPE / CO-EXISTENCE
   longer touched: the gate in the claude wrapper covers it.
 
 VERIFICATION
-  tests/inference-provider/run.sh — 66 tests: resolution and refusals, sticky local-only, env
+  tests/inference-provider/run.sh — 67 tests: resolution and refusals, sticky local-only, env
   overlay/strip/restore, the decide() table, the real gate script end to end (bunfig preload,
   stale payload, settings re-route, subcommands, GATE=off, health cache) against a recording
-  fake claude and an up/down fake server, Inference.ts through the gate. 21 mutations killed.
+  fake claude and an up/down fake server, Inference.ts through the gate. 25 mutations killed.
 
 diff --git a/LifeOS/install/LIFEOS/TOOLS/Inference.ts b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 index b0408f9..b46ed52 100755
@@ -223,10 +225,10 @@ index b0408f9..b46ed52 100755
      if (expectJson && result.parsed) {
 diff --git a/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
 new file mode 100644
-index 0000000..dd2df26
+index 0000000..af37d90
 --- /dev/null
 +++ b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
-@@ -0,0 +1,445 @@
+@@ -0,0 +1,448 @@
 +#!/usr/bin/env bun
 +/**
 + * InferenceProvider.ts — which model server `claude` talks to, decided at every exec.
@@ -455,6 +457,8 @@ index 0000000..dd2df26
 +  env.CLAUDE_CODE_SUBAGENT_MODEL = local.models.opus;
 +  env[APPLIED_MARKER] = "1";
 +  if (cfg.mode === "local-only") {
++    // An inherited record (a local-with-fallback parent) would carry the key in too.
++    delete env[SAVED_MARKER];
 +    env[MODE_MARKER] = "local-only";
 +    env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
 +    // WebFetch asks api.anthropic.com about every domain before fetching; NONESSENTIAL does
@@ -593,10 +597,11 @@ index 0000000..dd2df26
 +  if (cfg.mode === "anthropic-only") return { action: "exec", env: anthropicEnv(clean) };
 +  if (cfg.mode === "local-only") {
 +    if (hint === "anthropic") return { action: "refuse", reason: "inference mode is local-only — Anthropic is not allowed" };
-+    // Any token, not just the first positional: `claude --model x update` still dispatches
-+    // update (review 3). A prompt right after -p/--print is text, not a subcommand.
-+    const sub = argv.find((a, i) =>
-+      (ANTHROPIC_SUBCOMMANDS as readonly string[]).includes(a) && argv[i - 1] !== "-p" && argv[i - 1] !== "--print");
++    // Print mode never dispatches a subcommand: every positional is prompt text. Otherwise any
++    // token counts, since `claude --model x update` still dispatches update (review 3); a flag
++    // value that happens to equal a name is refused too, which is fail-closed.
++    const printMode = argv.includes("-p") || argv.includes("--print");
++    const sub = printMode ? undefined : argv.find((a) => (ANTHROPIC_SUBCOMMANDS as readonly string[]).includes(a));
 +    if (sub) {
 +      return { action: "refuse", reason: `"claude ${sub}" talks to Anthropic — not allowed under local-only` };
 +    }

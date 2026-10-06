@@ -41,6 +41,8 @@ code="$(cd / && LIFEOS_GATE_CWD="$cwd" @bun@/bin/bun --no-env-file --config=/dev
 [ "${code##*$'\n'}" = ": lifeos-gate-ok" ] || refuse "inference gate gave no decision (stale LifeOS payload?)"
 # eval's status is the sentinel's (always 0), so a failing export/unset would go unseen:
 # apply once under set -e in a subshell to prove it applies cleanly, then for real.
-( set -e; eval "$code" ) >/dev/null 2>&1 || refuse "inference gate output did not apply"
+# Own line, status read after: on the left of `||` bash ignores set -e, even in a subshell.
+( set -e; eval "$code" ) >/dev/null 2>&1
+[ $? -eq 0 ] || refuse "inference gate output did not apply"
 eval "$code"
 exec "$real" "$@"

@@ -117,6 +117,11 @@ test("local-only never stores the user's API key in the session env", () => {
   expect(env.ANTHROPIC_API_KEY).toBeUndefined();
   expect(env.LIFEOS_INFERENCE_SAVED).toBeUndefined();
   expect(JSON.stringify(env)).not.toContain("sk-ant-x");
+  // …nor when the record was inherited from a local-with-fallback parent.
+  const parent = localEnv({ ANTHROPIC_API_KEY: "sk-ant-x" }, resolveProviderConfig(LOCAL));
+  expect(parent.LIFEOS_INFERENCE_SAVED).toContain("sk-ant-x"); // positive control
+  const child = localEnv(parent, resolveProviderConfig({ ...LOCAL, mode: "local-only" }));
+  expect(JSON.stringify(child)).not.toContain("sk-ant-x");
 });
 
 test("anthropicEnv strips exactly what localEnv added, and nothing when it added nothing", () => {
@@ -177,6 +182,7 @@ test.each(["update", "install", "setup-token", "login", "auth"])("decide: local-
 test("decide: a subcommand behind a flag value is still caught; a -p prompt is not a subcommand", async () => {
   expect((await decide({}, cfgOf("local-only"), up, ["--model", "x", "update"])).action).toBe("refuse");
   expect((await decide({}, cfgOf("local-only"), up, ["-p", "update"])).action).toBe("exec");
+  expect((await decide({}, cfgOf("local-only"), up, ["-p", "--verbose", "update"])).action).toBe("exec");
 });
 
 test("decide: local-only refuses when settings would re-route; fallback mode does not check", async () => {
@@ -366,6 +372,16 @@ test("gate: works with a PATH that has no getent (Pulse's unit PATH)", async () 
   const r = await claude({ PATH: path });
   expect(r.code).toBe(0);
   expect(r.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
+});
+
+test("gate: an env delta that fails to apply refuses (readonly var via BASH_ENV)", async () => {
+  config("local-only");
+  const rc = join(HOME, "ro.sh");
+  writeFileSync(rc, "readonly ANTHROPIC_BASE_URL=https://api.anthropic.com\n");
+  const r = await claude({ BASH_ENV: rc });
+  expect(r.code).toBe(3);
+  expect(r.stderr).toMatch(/did not apply/);
+  expect(r.spawns.length).toBe(0);
 });
 
 test("gate: missing gate file + local-only marker refuses", async () => {
