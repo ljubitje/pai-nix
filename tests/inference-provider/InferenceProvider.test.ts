@@ -179,10 +179,22 @@ test.each(["update", "install", "setup-token", "login", "auth"])("decide: local-
   expect(d.action).toBe("refuse");
 });
 
-test("decide: a subcommand behind a flag value is still caught; a -p prompt is not a subcommand", async () => {
-  expect((await decide({}, cfgOf("local-only"), up, ["--model", "x", "update"])).action).toBe("refuse");
-  expect((await decide({}, cfgOf("local-only"), up, ["-p", "update"])).action).toBe("exec");
-  expect((await decide({}, cfgOf("local-only"), up, ["-p", "--verbose", "update"])).action).toBe("exec");
+test.each([
+  [["--model", "x", "update"]],
+  [["--model", "-p", "update"]],           // "-p" as a flag value must not exempt anything
+  [["--append-system-prompt", "--print", "auth", "login"]],
+  [["ultrareview"]],
+  [["--cloud", "fix it"]],
+  [["--environment=prod"]],
+  [["--teleport"]],
+  [["--remote-control"]],
+])("decide: local-only refuses %j", async (argv) => {
+  expect((await decide({}, cfgOf("local-only"), up, argv)).action).toBe("refuse");
+});
+
+test("decide: ordinary local-only runs still exec", async () => {
+  expect((await decide({}, cfgOf("local-only"), up, ["-p", "fix the bug", "--model", "opus"])).action).toBe("exec");
+  expect((await decide({}, cfgOf("local-only"), up, ["--resume"])).action).toBe("exec");
 });
 
 test("decide: local-only refuses when settings would re-route; fallback mode does not check", async () => {

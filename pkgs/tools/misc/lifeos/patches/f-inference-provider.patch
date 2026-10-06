@@ -225,10 +225,10 @@ index b0408f9..b46ed52 100755
      if (expectJson && result.parsed) {
 diff --git a/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
 new file mode 100644
-index 0000000..af37d90
+index 0000000..ec631ac
 --- /dev/null
 +++ b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
-@@ -0,0 +1,448 @@
+@@ -0,0 +1,456 @@
 +#!/usr/bin/env bun
 +/**
 + * InferenceProvider.ts — which model server `claude` talks to, decided at every exec.
@@ -309,7 +309,11 @@ index 0000000..af37d90
 +  ANTHROPIC_HOST_SUFFIXES.some((d) => h === d || h.endsWith(`.${d}`));
 +
 +/** claude subcommands that talk to Anthropic whatever ANTHROPIC_BASE_URL says. */
-+export const ANTHROPIC_SUBCOMMANDS = ["update", "upgrade", "install", "setup-token", "login", "logout", "auth"] as const;
++export const ANTHROPIC_SUBCOMMANDS = ["update", "upgrade", "install", "setup-token", "login", "logout", "auth",
++  "ultrareview", "remote-control"] as const;
++
++/** claude flags that hand the session to Anthropic's cloud (`--flag` or `--flag=value`). */
++export const ANTHROPIC_FLAGS = ["--cloud", "--environment", "--teleport", "--remote-control", "--from-pr", "--desktop"] as const;
 +
 +/** Settings env keys that would re-route claude after the gate has decided. */
 +const ROUTING_SETTINGS_KEYS = ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
@@ -597,13 +601,17 @@ index 0000000..af37d90
 +  if (cfg.mode === "anthropic-only") return { action: "exec", env: anthropicEnv(clean) };
 +  if (cfg.mode === "local-only") {
 +    if (hint === "anthropic") return { action: "refuse", reason: "inference mode is local-only — Anthropic is not allowed" };
-+    // Print mode never dispatches a subcommand: every positional is prompt text. Otherwise any
-+    // token counts, since `claude --model x update` still dispatches update (review 3); a flag
-+    // value that happens to equal a name is refused too, which is fail-closed.
-+    const printMode = argv.includes("-p") || argv.includes("--print");
-+    const sub = printMode ? undefined : argv.find((a) => (ANTHROPIC_SUBCOMMANDS as readonly string[]).includes(a));
++    // Any token counts, with no print-mode exemption: "-p" can itself be a flag value
++    // (`claude --model -p update` dispatches update; review 4), and argv cannot be parsed the
++    // way commander does without its option table. A prompt that is exactly a subcommand name
++    // is refused too — fail-closed, and the prompt can go through stdin instead.
++    const sub = argv.find((a) => (ANTHROPIC_SUBCOMMANDS as readonly string[]).includes(a));
 +    if (sub) {
 +      return { action: "refuse", reason: `"claude ${sub}" talks to Anthropic — not allowed under local-only` };
++    }
++    const flag = argv.find((a) => (ANTHROPIC_FLAGS as readonly string[]).some((f) => a === f || a.startsWith(`${f}=`)));
++    if (flag) {
++      return { action: "refuse", reason: `"${flag.split("=")[0]}" hands the session to Anthropic's cloud — not allowed under local-only` };
 +    }
 +    const hits = overrides();
 +    if (hits.length) {
