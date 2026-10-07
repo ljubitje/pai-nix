@@ -42,16 +42,14 @@ console.log(JSON.stringify({ result: "ok", modelUsage: { [model]: { outputTokens
 FAKE
 chmod +x "$TREE/real/claude"
 
-# HOME/.claude IS the payload. The gate's passwd lookup is a fake too, so nothing can fall
-# through to the real home of whoever runs the suite.
+# HOME/.claude IS the payload. The gate's passwd lookup is a fake that reports $FAKE_PW_HOME
+# (default: the sandbox home), so nothing can fall through to the real home of whoever runs
+# the suite. A second gate copy has a getent that resolves nothing (unknown uid).
 ln -s "$ROOT" "$TREE/home/.claude"
-NOGATE_HOME="$TREE/nogate-home"; mkdir -p "$NOGATE_HOME/.claude/LIFEOS/USER/CONFIG"
-fake_getent() {   # $1 = dir for bin/getent, $2 = home it reports ("" = unknown uid)
-  mkdir -p "$1/bin"
-  if [ -n "$2" ]; then printf '#!/bin/sh\necho "u:x:1000:1000::%s:/bin/sh"\n' "$2" > "$1/bin/getent"
-  else printf '#!/bin/sh\nexit 2\n' > "$1/bin/getent"; fi
-  chmod +x "$1/bin/getent"
-}
+mkdir -p "$TREE/pw-home/bin" "$TREE/pw-none/bin"
+printf '#!/bin/sh\necho "u:x:1000:1000::${FAKE_PW_HOME:-%s}:/bin/sh"\n' "$TREE/home" > "$TREE/pw-home/bin/getent"
+printf '#!/bin/sh\nexit 2\n' > "$TREE/pw-none/bin/getent"
+chmod +x "$TREE/pw-home/bin/getent" "$TREE/pw-none/bin/getent"
 gate_copy() {     # $1 = output path, $2 = getent dir. The gate exactly as the derivation installs it.
   mkdir -p "$(dirname "$1")"
   sed -e "s|@bash@|$(dirname "$(dirname "$(command -v bash)")")|g" \
@@ -63,15 +61,14 @@ gate_copy() {     # $1 = output path, $2 = getent dir. The gate exactly as the d
       "$REPO/pkgs/tools/misc/claude-code/claude-gate.sh" > "$1"
   chmod +x "$1"
 }
-fake_getent "$TREE/pw-home" "$TREE/home";        gate_copy "$TREE/home/bin/claude" "$TREE/pw-home"
-fake_getent "$TREE/pw-none" "";                  gate_copy "$TREE/nopw-gate/claude" "$TREE/pw-none"
-fake_getent "$TREE/pw-nogate" "$NOGATE_HOME";    gate_copy "$TREE/nogate-gate/claude" "$TREE/pw-nogate"
+gate_copy "$TREE/home/bin/claude" "$TREE/pw-home"
+gate_copy "$TREE/nopw-gate/claude" "$TREE/pw-none"
 
 cd "$ROOT/LIFEOS/TOOLS"
-# Scrub provider vars from the outer shell so the anthropic-only assertions see only what
-# the code under test sets.
-env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u CLAUDECODE \
-  -u LIFEOS_INFERENCE_MODE -u LIFEOS_INFERENCE_TARGET -u LIFEOS_GATE -u XDG_RUNTIME_DIR -u CLAUDE_CONFIG_DIR \
-  HOME="$TREE/home" SPAWNS_FILE="$TREE/home/spawns.jsonl" NOGATE_HOME="$NOGATE_HOME" \
-  NOPW_GATE="$TREE/nopw-gate/claude" NOGATE_GATE="$TREE/nogate-gate/claude" PATH="$TREE/home/bin:$PATH" \
-  bun test InferenceProvider.test.ts
+# A clean environment: nothing from the shell that runs the suite (a local session's
+# ANTHROPIC_*/LIFEOS_* variables, XDG dirs, bun caches) can reach the code under test.
+env -i PATH="$TREE/home/bin:$PATH" HOME="$TREE/home" TMPDIR="$TREE/tmp" \
+  XDG_CACHE_HOME="$TREE/cache" XDG_CONFIG_HOME="$TREE/config" \
+  SPAWNS_FILE="$TREE/home/spawns.jsonl" NOPW_GATE="$TREE/nopw-gate/claude" \
+  LIFEOS_INFERENCE_CONF="$TREE/home/.claude/LIFEOS/USER/CONFIG/inference.conf" \
+  bash -c 'mkdir -p "$TMPDIR" && exec bun test InferenceProvider.test.ts'

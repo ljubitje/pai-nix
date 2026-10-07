@@ -1,20 +1,20 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ANTHROPIC_ONLY, anthropicEnv, decide, envDiffShell, localEnv, localModelFor,
-  loadProviderConfig, resolveProviderConfig, tierOf, type ProviderConfig,
+  loadProviderConfig, parseConf, resolveProviderConfig, tierOf, type ProviderConfig,
 } from "./InferenceProvider";
 
-// Runs inside a materialised payload (see run.sh). HOME/.claude IS that payload, and the gate's
-// passwd lookup is a fake that points at the same HOME, so nothing here can reach the real home.
-// PATH starts with the REAL lifeos-nix gate script (claude-gate.sh) whose `real` binary is a
-// fake claude that records every exec.
+// Runs inside a materialised payload (see run.sh). HOME/.claude IS that payload. The gate's
+// passwd lookup is a fake getent that reports $FAKE_PW_HOME (default: HOME), so no test can
+// reach the real home of whoever runs the suite. PATH starts with the REAL lifeos-nix gate
+// script whose `real` binary is a fake claude that records every exec in $SPAWNS_FILE.
 const HOME = process.env.HOME!;
 const SPAWNS = process.env.SPAWNS_FILE!;
 const EVENTS = join(HOME, ".claude/LIFEOS/MEMORY/OBSERVABILITY/inference-provider.jsonl");
-const CFG = join(HOME, "cfg.toml");
-const HOME_CFG = join(HOME, ".claude/LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml");
+const CONF_REL = ".claude/LIFEOS/USER/CONFIG/inference.conf";
+const CONF = join(HOME, CONF_REL);
 const GATE = Bun.which("claude")!;
 
 const LOCAL = {
@@ -27,45 +27,46 @@ const spawns = () => lines(SPAWNS);
 const events = () => lines(EVENTS).map((e) => e.event);
 const reset = () => { rmSync(SPAWNS, { force: true }); rmSync(EVENTS, { force: true }); };
 
-// ── resolution: fail closed on anything that is not clearly meant ─────────────────
+// ── inference.conf: one strict line format, read the same way by shell and TS ─────────
 
-test("no [inference] section, or empty one, resolves to anthropic-only", () => {
-  expect(resolveProviderConfig(undefined)).toEqual(ANTHROPIC_ONLY);
-  expect(resolveProviderConfig({})).toEqual(ANTHROPIC_ONLY);
+test("no settings, or only comments, is anthropic-only", () => {
+  expect(parseConf("")).toEqual(ANTHROPIC_ONLY);
+  expect(parseConf("# nothing here\n\n   \n")).toEqual(ANTHROPIC_ONLY);
 });
 
-test("[inference.local] without mode defaults to local-with-fallback", () => {
-  expect(resolveProviderConfig({ local: LOCAL.local }).mode).toBe("local-with-fallback");
+test("a full local config parses, CRLF and comments allowed", () => {
+  const c = parseConf("# iskre\r\nmode=local-only\r\nbase_url=http://127.0.0.1:9/\nmodel=big\nmodel_haiku=small\ntoken_env=ISKRA_TOKEN\n");
+  expect(c.mode).toBe("local-only");
+  expect(c.local!.baseUrl).toBe("http://127.0.0.1:9");
+  expect(c.local!.models).toEqual({ fable: "big", opus: "big", sonnet: "big", haiku: "small" });
+  expect(c.local!.tokenEnv).toBe("ISKRA_TOKEN");
 });
 
-test("explicit anthropic-only wins over a configured local table", () => {
-  expect(resolveProviderConfig({ ...LOCAL, mode: "anthropic-only" })).toEqual(ANTHROPIC_ONLY);
+test("no mode + base_url defaults to local-with-fallback", () => {
+  expect(parseConf("base_url=http://x\nmodel=m\n").mode).toBe("local-with-fallback");
 });
 
 test.each([
-  [{ mode: "lokal-only", local: LOCAL.local }, /mode/],
-  [{ mdoe: "local-only", local: LOCAL.local }, /unknown key "mdoe"/],
-  [{ local: { ...LOCAL.local, mode: "local-only" } }, /unknown key "mode"/], // mode under the wrong table
-  [{ mode: "local-only" }, /\[inference\.local\]/],
-  [{ mode: "local-only", local: { model: "m" } }, /base_url/],
+  ["mode = local-only\n", /key=value/],                      // spaces
+  ['mode="local-only"\n', /mode=/],                          // quotes become part of the value
+  ["mdoe=local-only\n", /unknown key "mdoe"/],
+  ["mode=local-only\nmode=anthropic-only\n", /given twice/],
+  ['[inference]\nmode = "local-only"\n', /key=value/],       // TOML is not this format
+  ["mode=local-only\n", /needs base_url= and model=/],
+  ["mode=local-only\nbase_url=http://x\nmodel=m\ntoken_env=ANTHROPIC_AUTH_TOKEN\n", /ANTHROPIC_/],
+])("invalid inference.conf refuses loudly: %j", (text, msg) => {
+  expect(() => parseConf(text, "/x/inference.conf")).toThrow(msg);
+});
+
+test.each([
   [{ mode: "local-only", local: { base_url: "ftp://x", model: "m" } }, /base_url/],
   [{ mode: "local-only", local: { base_url: "http://x" } }, /no model for tier/],
-  [{ mode: "local-only", local: { base_url: "http://x", model: "m", models: { gpt: "y" } } }, /unknown key "gpt"/],
-  [{ mode: "local-only", local: { base_url: "http://x", model: "m", token_env: "" } }, /token_env/],
-  [{ mode: "anthropic-only", local: { base_url: "nonsense" } }, /base_url/],
   [{ mode: "local-only", local: { base_url: "http://x@api.anthropic.com", model: "m" } }, /plain http/],
   [{ mode: "local-only", local: { base_url: "https://api.anthropic.com", model: "m" } }, /points at Anthropic/],
   [{ mode: "local-only", local: { base_url: "https://foo.claude.ai/v1", model: "m" } }, /points at Anthropic/],
   [{ mode: "local-only", local: { base_url: "https://api.anthropic.com./", model: "m" } }, /points at Anthropic/],
-])("invalid section refuses loudly: %j", (raw, msg) => {
-  expect(() => resolveProviderConfig(raw, "/cfg.toml")).toThrow(msg);
-  expect(() => resolveProviderConfig(raw, "/cfg.toml")).toThrow(/\/cfg\.toml/);
-});
-
-test("tiers fill from the default model, overrides win, trailing slash trimmed", () => {
-  const c = resolveProviderConfig(LOCAL);
-  expect(c.local!.baseUrl).toBe("http://127.0.0.1:9");
-  expect(c.local!.models).toEqual({ fable: "big-local", opus: "big-local", sonnet: "big-local", haiku: "small-local" });
+])("invalid local settings refuse: %j", (raw, msg) => {
+  expect(() => resolveProviderConfig(raw, "/x/inference.conf")).toThrow(msg);
 });
 
 test("aliases and pinned ids map to their tier's local model", () => {
@@ -75,19 +76,16 @@ test("aliases and pinned ids map to their tier's local model", () => {
   expect(localModelFor(local!, "claude-opus-5")).toBe("big-local");
 });
 
-test("no config file → anthropic-only", () => {
-  process.env.LIFEOS_CONFIG_PATH = join(HOME, "missing.toml");
-  expect(loadProviderConfig()).toEqual(ANTHROPIC_ONLY);
-});
-
-test("a TOML error elsewhere stays anthropic-only; one that may name inference refuses", () => {
-  process.env.LIFEOS_CONFIG_PATH = CFG;
-  writeFileSync(CFG, '[principal]\nname = "Klemen\n');                 // unterminated string
-  expect(loadProviderConfig()).toEqual(ANTHROPIC_ONLY);
-  writeFileSync(CFG, '[inference]\nmode = "local-only\n');
-  expect(() => loadProviderConfig()).toThrow();
-  writeFileSync(CFG, '["infer\\u0065nce"]\nmode = "x\n');               // escaped key, broken
-  expect(() => loadProviderConfig()).toThrow();
+test("loadProviderConfig: absent → anthropic-only; unreadable or a directory → throws", () => {
+  const dir = join(HOME, "loadtest");
+  mkdirSync(dir, { recursive: true });
+  expect(loadProviderConfig(join(dir, "missing.conf"))).toEqual(ANTHROPIC_ONLY);
+  const f = join(dir, "locked.conf");
+  writeFileSync(f, "mode=anthropic-only\n");
+  chmodSync(f, 0o000);
+  expect(() => loadProviderConfig(f)).toThrow(/cannot read/);
+  chmodSync(f, 0o600);
+  expect(() => loadProviderConfig(dir)).toThrow(/cannot read/);
 });
 
 // ── env overlay ───────────────────────────────────────────────────────────────
@@ -100,7 +98,6 @@ test("local env points claude at the server, sets a credential, drops the API ke
   expect(env.ANTHROPIC_BASE_URL).toBe("http://127.0.0.1:9");
   expect(env.ANTHROPIC_AUTH_TOKEN).toBe("secret");
   expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("small-local");
-  expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe("small-local");
   expect(env.KEEP).toBe("1");
   expect(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBeUndefined(); // only under local-only
   expect(localEnv({}, resolveProviderConfig(LOCAL)).ANTHROPIC_AUTH_TOKEN).toBe("lifeos-local-no-auth");
@@ -171,12 +168,16 @@ beforeAll(() => {
 });
 afterAll(() => server?.stop(true));
 const base = () => `http://127.0.0.1:${server!.port}`;
-const localToml = (mode: string) =>
-  `[inference]\nmode = "${mode}"\n[inference.local]\nbase_url = "${base()}"\nmodel = "big-local"\n`;
+const localConf = (mode: string | null) =>
+  `${mode ? `mode=${mode}\n` : ""}base_url=${base()}\nmodel=big-local\n`;
 
-function config(mode: string | null) {
-  writeFileSync(CFG, mode === null ? "" : localToml(mode));
-  process.env.LIFEOS_CONFIG_PATH = CFG;
+/** Write inference.conf under `home` (default: the main sandbox home); null removes it. */
+function conf(text: string | null, home = HOME) {
+  const f = join(home, CONF_REL);
+  mkdirSync(join(home, ".claude/LIFEOS/USER/CONFIG"), { recursive: true });
+  try { chmodSync(f, 0o600); } catch { /* absent */ }
+  rmSync(f, { force: true, recursive: true });
+  if (text !== null) writeFileSync(f, text);
 }
 async function claude(extraEnv: Record<string, string | undefined> = {}, cwd = HOME, bin = GATE, args = ["-p", "hi"]) {
   reset();
@@ -186,22 +187,49 @@ async function claude(extraEnv: Record<string, string | undefined> = {}, cwd = H
   const code = await p.exited;
   return { code, stderr: await new Response(p.stderr).text(), spawns: spawns(), events: events() };
 }
+/** A separate passwd home: own conf, and a gate file or none. */
+function otherHome(name: string, gateSource: string | null) {
+  const h = join(HOME, name);
+  mkdirSync(join(h, ".claude/LIFEOS/TOOLS"), { recursive: true });
+  const g = join(h, ".claude/LIFEOS/TOOLS/InferenceProvider.ts");
+  rmSync(g, { force: true });
+  if (gateSource !== null) writeFileSync(g, gateSource);
+  return h;
+}
 
-test("gate fixture: claude on PATH is the gate script, and passwd points into the sandbox", () => {
-  expect(readFileSync(GATE, "utf8")).toContain("inference gate");
-  expect(readFileSync(GATE, "utf8")).not.toContain("/run/current-system/sw/bin/getent");
+test("gate fixture: claude on PATH is the gate script, and passwd is the sandbox fake", () => {
+  const src = readFileSync(GATE, "utf8");
+  expect(src).toContain("inference gate");
+  expect(src).not.toContain("/run/current-system/sw/bin/getent");
 });
 
-test("gate: anthropic-only execs with no local variables", async () => {
-  config(null);
-  const r = await claude();
+test("gate: no inference.conf → plain claude, the gate never runs", async () => {
+  const h = otherHome("crashing-gate", "process.exit(9);\n"); // would refuse if it ran
+  conf(null, h);
+  const r = await claude({ FAKE_PW_HOME: h });
   expect(r.code).toBe(0);
   expect(r.spawns.length).toBe(1);
   expect(Object.keys(r.spawns[0].env).filter((k) => k.startsWith("ANTHROPIC_"))).toEqual([]);
 });
 
+test("gate: mode=anthropic-only → plain claude without running the gate", async () => {
+  const h = otherHome("crashing-gate", "process.exit(9);\n");
+  conf("mode=anthropic-only\n", h);
+  const r = await claude({ FAKE_PW_HOME: h });
+  expect(r.code).toBe(0);
+  expect(r.spawns.length).toBe(1);
+});
+
+test("gate: anthropic-only with an inherited local env goes through the gate and is stripped", async () => {
+  conf("mode=anthropic-only\n");
+  const inherited = localEnv({}, resolveProviderConfig({ ...LOCAL, local: { ...LOCAL.local, base_url: base() } }));
+  const r = await claude(inherited);
+  expect(r.code).toBe(0);
+  expect(Object.keys(r.spawns[0].env).filter((k) => k.startsWith("ANTHROPIC_"))).toEqual([]);
+});
+
 test("gate: local-only + server down still goes local (fails, never fails over)", async () => {
-  config("local-only");
+  conf(localConf("local-only"));
   serverUp = false;
   const r = await claude();
   serverUp = true;
@@ -210,7 +238,7 @@ test("gate: local-only + server down still goes local (fails, never fails over)"
 });
 
 test("gate: local-only refuses an explicit Anthropic request, real claude never runs", async () => {
-  config("local-only");
+  conf(localConf("local-only"));
   const r = await claude({ LIFEOS_INFERENCE_TARGET: "anthropic" });
   expect(r.code).toBe(3);
   expect(r.spawns.length).toBe(0);
@@ -218,22 +246,51 @@ test("gate: local-only refuses an explicit Anthropic request, real claude never 
 });
 
 test("gate: a child that scrubbed the local env (CarrierProbe-style) gets it back, OAuth-safe", async () => {
-  config("local-only");
+  conf(localConf("local-only"));
   const r = await claude({ ANTHROPIC_BASE_URL: undefined, ANTHROPIC_AUTH_TOKEN: undefined });
   expect(r.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
   expect(r.spawns[0].env.ANTHROPIC_AUTH_TOKEN).toBe("lifeos-local-no-auth");
 });
 
-test("gate: invalid config refuses", async () => {
-  writeFileSync(CFG, `[inference]\nmdoe = "local-only"\n`);
-  process.env.LIFEOS_CONFIG_PATH = CFG;
+test("gate: env cannot move the decision — $HOME, LIFEOS_INFERENCE_CONF, CLAUDE_CONFIG_DIR", async () => {
+  conf(localConf("local-only"));
+  const elsewhere = join(HOME, "elsewhere");
+  mkdirSync(elsewhere, { recursive: true });
+  const r = await claude({ HOME: elsewhere, LIFEOS_INFERENCE_CONF: join(elsewhere, "none.conf"), CLAUDE_CONFIG_DIR: elsewhere });
+  expect(r.code).toBe(0);
+  expect(r.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base()); // passwd home's local-only still wins
+});
+
+test.each([
+  ["mode = local-only\n"],
+  ['mode="local-only"\n'],
+  ["mode=local-only\nmode=anthropic-only\n"],
+  ["mdoe=local-only\n"],
+  ['base_url = """http://x"""\n'],
+  ["mode=anthropic-only\nmode = local-only\n"],   // the fast path must not skip the line rule
+])("gate: an invalid inference.conf refuses, real claude never runs: %j", async (text) => {
+  conf(text);
   const r = await claude();
   expect(r.code).toBe(3);
   expect(r.spawns.length).toBe(0);
 });
 
+test("gate: an unreadable inference.conf, or a directory in its place, refuses", async () => {
+  conf("mode=anthropic-only\n");
+  chmodSync(CONF, 0o000);
+  const locked = await claude();
+  chmodSync(CONF, 0o600);
+  expect(locked.code).toBe(3);
+  expect(locked.spawns.length).toBe(0);
+  conf(null);
+  mkdirSync(CONF);
+  const dir = await claude();
+  expect(dir.code).toBe(3);
+  conf(null);
+});
+
 test("gate: fallback mode follows server health, with a notice and an event when down", async () => {
-  config("local-with-fallback");
+  conf(localConf("local-with-fallback"));
   serverUp = true;
   const upRun = await claude();
   expect(upRun.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
@@ -246,7 +303,7 @@ test("gate: fallback mode follows server health, with a notice and an event when
 });
 
 test("gate: a down server is probed once per cache window, not once per exec", async () => {
-  config("local-with-fallback");
+  conf(localConf("local-with-fallback"));
   const runtime = join(HOME, "runtime");
   mkdirSync(runtime, { recursive: true });
   serverUp = false;
@@ -258,18 +315,8 @@ test("gate: a down server is probed once per cache window, not once per exec", a
   expect(fresh.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
 });
 
-test("gate: a .env in the cwd does not reach the decision", async () => {
-  config("local-only");
-  const dir = join(HOME, "proj");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, ".env"), "LIFEOS_INFERENCE_TARGET=anthropic\n");
-  const r = await claude({}, dir);
-  expect(r.code).toBe(0);
-  expect(r.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
-});
-
 test("gate: a project bunfig.toml preload never runs inside the decision", async () => {
-  config("local-only");
+  conf(localConf("local-only"));
   const dir = join(HOME, "evil");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "bunfig.toml"), 'preload = ["./pre.ts"]\n');
@@ -281,7 +328,7 @@ test("gate: a project bunfig.toml preload never runs inside the decision", async
 });
 
 test("gate: an env delta that fails to apply refuses (readonly var via BASH_ENV)", async () => {
-  config("local-only");
+  conf(localConf("local-only"));
   const rc = join(HOME, "ro.sh");
   writeFileSync(rc, "readonly ANTHROPIC_BASE_URL=https://api.anthropic.com\n");
   const r = await claude({ BASH_ENV: rc });
@@ -291,84 +338,55 @@ test("gate: an env delta that fails to apply refuses (readonly var via BASH_ENV)
 });
 
 test("gate: a stale payload whose gate does not speak the protocol refuses", async () => {
-  config("local-only");
-  const stale = join(HOME, "stale-lifeos");
-  mkdirSync(join(stale, "LIFEOS/TOOLS"), { recursive: true });
-  writeFileSync(join(stale, "LIFEOS/TOOLS/InferenceProvider.ts"), 'console.log(JSON.stringify({ mode: "local-only" }));\n');
-  const r = await claude({ CLAUDE_CONFIG_DIR: stale });
+  const h = otherHome("stale", 'console.log(JSON.stringify({ mode: "local-only" }));\n');
+  conf(localConf("local-only"), h);
+  const r = await claude({ FAKE_PW_HOME: h });
   expect(r.code).toBe(3);
   expect(r.stderr).toMatch(/no decision/);
   expect(r.spawns.length).toBe(0);
 });
 
-// The "may this config name local-only?" checks read the home config, so these tests write it
-// there and remove it again.
-async function withHomeConfig<T>(text: string, fn: () => Promise<T>): Promise<T> {
-  mkdirSync(join(HOME, ".claude/LIFEOS/USER/CONFIG"), { recursive: true });
-  writeFileSync(HOME_CFG, text);
-  try { return await fn(); } finally { rmSync(HOME_CFG, { force: true }); }
-}
-// A home with a LifeOS config but no gate (no payload, or one not yet synced).
-const NOGATE_HOME = process.env.NOGATE_HOME!;
-const NOGATE_CFG = join(NOGATE_HOME, ".claude/LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml");
-const noGate = { HOME: NOGATE_HOME, LIFEOS_CONFIG_PATH: undefined };
-async function noGateRun(text: string | null, unreadable = false) {
-  rmSync(NOGATE_CFG, { force: true });
-  if (text !== null) writeFileSync(NOGATE_CFG, text);
-  if (unreadable) Bun.spawnSync(["chmod", "000", NOGATE_CFG]);
-  try { return await claude(noGate, NOGATE_HOME, process.env.NOGATE_GATE!); }
-  finally { rmSync(NOGATE_CFG, { force: true }); }
-}
-
-test("gate: no gate anywhere + no local-only config → plain claude", async () => {
-  const r = await noGateRun("[principal]\nname = \"x\"\n");
-  expect(r.code).toBe(0);
-  expect(r.spawns.length).toBe(1);
-});
-
-test("gate: no gate anywhere + a config naming local-only (even escaped, even unreadable) refuses", async () => {
-  for (const [text, unreadable] of [[localToml("local-only"), false], ['["infer\\u0065nce"]\nmode = "x"\n', false], ["nothing\n", true]] as const) {
-    const r = await noGateRun(text, unreadable);
+test("gate: a local mode with no gate file refuses", async () => {
+  const h = otherHome("nogate", null);
+  for (const text of [localConf("local-only"), localConf("local-with-fallback"), localConf(null)]) {
+    conf(text, h);
+    const r = await claude({ FAKE_PW_HOME: h });
     expect(r.code).toBe(3);
     expect(r.spawns.length).toBe(0);
   }
 });
 
-test("gate: LIFEOS_GATE=off is a plain exec, unless a config may name local-only", async () => {
-  config(null);
-  const r = await claude({ LIFEOS_GATE: "off" });
-  expect(r.code).toBe(0);
-  expect(r.spawns.length).toBe(1);
-  const blocked = await withHomeConfig(localToml("local-only"), () => claude({ LIFEOS_GATE: "off" }));
-  expect(blocked.code).toBe(3);
-  expect(blocked.spawns.length).toBe(0);
+test("gate: LIFEOS_GATE=off — plain claude except where the conf may say local-only", async () => {
+  const cases: [string | null, number][] = [
+    [null, 0], ["mode=anthropic-only\n", 0], [localConf("local-with-fallback"), 0],
+    [localConf("local-only"), 3], [localConf(null), 3],
+  ];
+  for (const [text, code] of cases) {
+    conf(text);
+    const r = await claude({ LIFEOS_GATE: "off" });
+    expect(r.code).toBe(code);
+    expect(r.spawns.length).toBe(code === 0 ? 1 : 0);
+    if (code === 0) expect(r.spawns[0].env.ANTHROPIC_BASE_URL).toBeUndefined();
+  }
 });
 
-test("gate: a uid passwd cannot resolve still finds LifeOS through $HOME", async () => {
-  config("local-only");
+test("gate: a uid passwd cannot resolve falls back to $HOME, still gated", async () => {
+  conf(localConf("local-only"));
   const r = await claude({}, HOME, process.env.NOPW_GATE!);
-  expect(r.code).toBe(0);
-  expect(r.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base()); // gated, not plain
-});
-
-test("gate: works with a PATH that has no getent (Pulse's unit PATH)", async () => {
-  config("local-only");
-  const path = [GATE.replace(/\/claude$/, ""), Bun.which("bun")!.replace(/\/bun$/, "")].join(":");
-  const r = await claude({ PATH: path });
   expect(r.code).toBe(0);
   expect(r.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
 });
 
 // ── Inference.ts end to end, through the gate ─────────────────────────────────────
 
-async function infer(level = "low") {
+async function infer(level = "low", extra: Record<string, unknown> = {}) {
   reset();
   const { inference } = await import("./Inference");
-  return inference({ systemPrompt: "s", userPrompt: "u", level: level as any, timeout: 15_000 });
+  return inference({ systemPrompt: "s", userPrompt: "u", level: level as any, timeout: 15_000, ...extra });
 }
 
 test("inference, local healthy: answers locally, no false downgrade", async () => {
-  config("local-with-fallback");
+  conf(localConf("local-with-fallback"));
   process.env.FAKE_LOCAL_FAIL = "0";
   const r = await infer();
   expect(r.provider).toBe("local");
@@ -378,7 +396,7 @@ test("inference, local healthy: answers locally, no false downgrade", async () =
 });
 
 test("inference, local fails: one Anthropic retry, every local variable and credential gone", async () => {
-  config("local-with-fallback");
+  conf(localConf("local-with-fallback"));
   process.env.FAKE_LOCAL_FAIL = "1";
   // Simulate running inside a local interactive session: inherited local variables.
   const inherited = localEnv({ ANTHROPIC_API_KEY: "sk-ant-own", ANTHROPIC_BASE_URL: "https://corp-proxy" },
@@ -398,17 +416,18 @@ test("inference, local fails: one Anthropic retry, every local variable and cred
   }
 });
 
-test("inference, local-only fails: error, Anthropic never spawned", async () => {
-  config("local-only");
+test("inference, local-only fails: error, and every spawn went local", async () => {
+  conf(localConf("local-only"));
   process.env.FAKE_LOCAL_FAIL = "1";
   const r = await infer("max");
+  const s = spawns();
   expect(r.success).toBe(false);
-  expect(spawns().every((x) => x.env.ANTHROPIC_BASE_URL === base())).toBe(true);
+  expect(s.length).toBeGreaterThan(0);
+  expect(s.every((x) => x.env.ANTHROPIC_BASE_URL === base())).toBe(true);
 });
 
 test("inference, invalid config: error, zero spawns", async () => {
-  writeFileSync(CFG, `[inference]\nmode = "lokal-only"\n`);
-  process.env.LIFEOS_CONFIG_PATH = CFG;
+  conf("mode=lokal-only\n");
   const r = await infer();
   expect(r.success).toBe(false);
   expect(r.error).toMatch(/provider config invalid/);
