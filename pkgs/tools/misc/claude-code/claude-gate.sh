@@ -18,6 +18,24 @@ home="${home:-${HOME:-}}"
 [ -n "$home" ] || refuse "cannot tell this account's home (passwd and \$HOME both empty)"
 conf="$home/.claude/LIFEOS/USER/CONFIG/inference.conf"
 
+# A link along the path that points nowhere (an unmounted disk, a moved USER tree) must not
+# read as "no config". Only a path that is genuinely not there is anthropic-only.
+p="$home"
+for c in .claude LIFEOS USER CONFIG inference.conf; do
+  p="$p/$c"
+  if [ -L "$p" ] && [ ! -e "$p" ]; then refuse "$p is a link to nothing"; fi
+  [ -e "$p" ] || break
+done
+# A second LifeOS (the launcher honours CLAUDE_CONFIG_DIR) with its own inference.conf is
+# ambiguous: this gate reads the passwd home's. Refuse rather than silently ignore it.
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  other="$CLAUDE_CONFIG_DIR/LIFEOS/USER/CONFIG/inference.conf"
+  if [ -e "$other" ] || [ -L "$other" ]; then
+    [ "$(@coreutils@/bin/realpath -m -- "$other")" = "$(@coreutils@/bin/realpath -m -- "$conf")" ] \
+      || refuse "CLAUDE_CONFIG_DIR has its own $other; this gate reads $conf only"
+  fi
+fi
+
 # Read it ONCE; everything below (this script, the gate, Inference.ts via --lifeos-gate-query)
 # decides from this one text. CR is dropped and NUL becomes a space (which then fails the line
 # rule), the same normalisation InferenceProvider.parseConf applies. Absent (ENOENT on a path

@@ -295,6 +295,34 @@ test("gate: an unreadable inference.conf, or a directory in its place, refuses",
   conf(null);
 });
 
+test("gate: a link to nothing anywhere on the conf path refuses; a missing .claude is plain claude", async () => {
+  const { symlinkSync } = await import("node:fs");
+  const h1 = otherHome("dangling-conf", null);
+  conf(null, h1);
+  symlinkSync(join(h1, "not-mounted/inference.conf"), join(h1, CONF_REL));
+  expect((await claude({ FAKE_PW_HOME: h1 })).code).toBe(3);
+  const h2 = join(HOME, "dangling-claude");
+  mkdirSync(h2, { recursive: true });
+  rmSync(join(h2, ".claude"), { force: true });
+  symlinkSync(join(h2, "persist/.claude"), join(h2, ".claude"));
+  expect((await claude({ FAKE_PW_HOME: h2 })).code).toBe(3);
+  const h3 = join(HOME, "no-claude-at-all");
+  mkdirSync(h3, { recursive: true });
+  const plain = await claude({ FAKE_PW_HOME: h3 });
+  expect(plain.code).toBe(0);
+  expect(plain.spawns.length).toBe(1);
+});
+
+test("gate: CLAUDE_CONFIG_DIR with its own inference.conf refuses; the same tree or none is fine", async () => {
+  conf("mode=anthropic-only\n");
+  const other = join(HOME, "second-lifeos");
+  mkdirSync(join(other, "LIFEOS/USER/CONFIG"), { recursive: true });
+  writeFileSync(join(other, "LIFEOS/USER/CONFIG/inference.conf"), localConf("local-only"));
+  expect((await claude({ CLAUDE_CONFIG_DIR: other })).code).toBe(3);
+  expect((await claude({ CLAUDE_CONFIG_DIR: join(HOME, ".claude") })).code).toBe(0);
+  expect((await claude({ CLAUDE_CONFIG_DIR: join(HOME, "empty-cfgdir") })).code).toBe(0);
+});
+
 test("gate: fallback mode follows server health, with a notice and an event when down", async () => {
   conf(localConf("local-with-fallback"));
   serverUp = true;
