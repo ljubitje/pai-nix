@@ -37,6 +37,7 @@ const model = i >= 0 ? a[i + 1] : process.env.ANTHROPIC_MODEL ?? "default";
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => /^(ANTHROPIC_|CLAUDE_CODE_DISABLE|LIFEOS_INFERENCE|ENABLE_CLAUDEAI)/.test(k)));
 appendFileSync(process.env.SPAWNS_FILE!, JSON.stringify({ model, env }) + "\n");
 if (a.includes("--print")) await Bun.stdin.text();
+if (!process.env.ANTHROPIC_BASE_URL && process.env.FAKE_ANTHROPIC_SLEEP_MS) await Bun.sleep(Number(process.env.FAKE_ANTHROPIC_SLEEP_MS));
 if (process.env.ANTHROPIC_BASE_URL && process.env.FAKE_LOCAL_FAIL === "1") { console.error("connection refused"); process.exit(1); }
 console.log(JSON.stringify({ result: "ok", modelUsage: { [model]: { outputTokens: 5 } } }));
 FAKE

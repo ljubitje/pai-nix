@@ -513,6 +513,21 @@ test("inference, local fails: one Anthropic retry, every local variable and cred
   }
 });
 
+test("inference: the Anthropic leg of a fallback honours fallbackTimeoutMs", async () => {
+  conf(localConf("local-with-fallback"));
+  process.env.FAKE_LOCAL_FAIL = "1";
+  process.env.FAKE_ANTHROPIC_SLEEP_MS = "3000";
+  try {
+    const t0 = Date.now();
+    const r = await infer("low", { fallbackTimeoutMs: 400 });
+    expect(r.success).toBe(false);
+    expect(r.error).toMatch(/Timeout after 400ms/);
+    expect(Date.now() - t0).toBeLessThan(2500);
+  } finally {
+    delete process.env.FAKE_ANTHROPIC_SLEEP_MS;
+  }
+});
+
 test("inference, local-only fails: error, and every spawn went local", async () => {
   conf(localConf("local-only"));
   process.env.FAKE_LOCAL_FAIL = "1";
