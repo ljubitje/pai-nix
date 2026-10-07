@@ -84,13 +84,12 @@ stdenv.mkDerivation (finalAttrs: {
         )
       }
 
-    # lifeos-nix: inference gate. bin/claude becomes a thin script that asks LifeOS's
-    # InferenceProvider.ts which server this exec may use ([inference] in
-    # LIFEOS_CONFIG.toml) before exec'ing the real binary. Every spawn path — launcher,
-    # Inference.ts, Pulse, skills, a bare `claude` — goes through it. Without a LifeOS install
-    # it is a plain exec; LIFEOS_GATE=off is the manual escape hatch. A local-only parent
-    # (LIFEOS_INFERENCE_MODE=local-only) refuses rather than run ungated, and any gate failure
-    # refuses: the gate never fails open.
+    # lifeos-nix: inference gate. bin/claude becomes a thin script (claude-gate.sh) that reads
+    # LIFEOS/USER/CONFIG/inference.conf under the account's passwd home before exec'ing the
+    # real binary, so every spawn path — launcher, Inference.ts, Pulse, skills, a bare
+    # `claude` — goes through it. No file or mode=anthropic-only: plain exec, as upstream.
+    # Local modes: LifeOS's InferenceProvider.ts supplies the env. Anything it cannot read
+    # exactly refuses; LIFEOS_GATE=off is the manual escape hatch outside local-only.
     install -dm755 $out/libexec/claude-code
     mv $out/bin/claude $out/libexec/claude-code/claude
     substitute ${./claude-gate.sh} $out/bin/claude \
