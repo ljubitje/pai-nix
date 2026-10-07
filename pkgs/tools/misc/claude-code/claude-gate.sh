@@ -5,6 +5,9 @@
 # anthropic-only (also: no file) costs what upstream costs: no bun, no parse. Local modes ask
 # LifeOS's InferenceProvider.ts for the env. It routes; the local-only guarantee is the
 # network room (ISA Step 7c). Anything that cannot be read exactly refuses.
+# bash imports an exported SHELLOPTS: errexit would kill this script on a zero grep count,
+# xtrace would print the env delta (a local token) to stderr. Start from known options.
+set +e +u +x +v +o pipefail
 real=@real@
 refuse() { echo "❌ claude: $*" >&2; exit 3; }
 

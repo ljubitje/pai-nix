@@ -370,6 +370,17 @@ test("gate: LIFEOS_GATE=off — plain claude except where the conf may say local
   }
 });
 
+test("gate: an exported SHELLOPTS (errexit, xtrace) neither breaks the wrapper nor prints the token", async () => {
+  conf(`mode=local-only\nbase_url=${base()}\nmodel=big-local\ntoken_env=SECRET_TOK\n`);
+  const r = await claude({ SHELLOPTS: "errexit:xtrace", SECRET_TOK: "tok-123" });
+  expect(r.code).toBe(0);
+  expect(r.spawns[0].env.ANTHROPIC_AUTH_TOKEN).toBe("tok-123");
+  expect(r.stderr).not.toContain("tok-123");
+  conf(null);
+  const plain = await claude({ SHELLOPTS: "errexit" });
+  expect(plain.code).toBe(0);
+});
+
 test("gate: a uid passwd cannot resolve falls back to $HOME, still gated", async () => {
   conf(localConf("local-only"));
   const r = await claude({}, HOME, process.env.NOPW_GATE!);
