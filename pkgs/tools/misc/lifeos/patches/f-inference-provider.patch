@@ -62,18 +62,19 @@ VERIFICATION
   cache, GATE=off, unresolvable uid), Inference.ts through the gate. Mutation-checked.
 
 diff --git a/LifeOS/install/LIFEOS/TOOLS/Inference.ts b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
-index b0408f9..806552b 100755
+index b0408f9..439d357 100755
 --- a/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
-@@ -51,6 +51,7 @@ import { join } from "path";
+@@ -51,6 +51,8 @@ import { join } from "path";
  import { homedir, tmpdir } from "os";
  import { randomUUID } from "crypto";
  import { modelForEffort, pinnedModelForEffort, EFFORT_MODEL, UNIFORM_HARNESS_EFFORT, type EffortLevel, type HarnessEffort } from './models';
-+import { anthropicEnv, loadProviderConfig, localEnv, localModelFor, recordProviderEvent, TARGET_HINT, type ProviderConfig } from './InferenceProvider';
++import { spawnSync } from 'child_process';
++import { ANTHROPIC_ONLY, anthropicEnv, localEnv, localModelFor, parseConf, recordProviderEvent, TARGET_HINT, type ProviderConfig } from './InferenceProvider';
  
  /**
   * Resolve the claude binary explicitly. launchd jobs run with a minimal PATH
-@@ -128,6 +129,11 @@ export interface InferenceResult {
+@@ -128,6 +130,11 @@ export interface InferenceResult {
     * Opus). undefined when executedModel is unknown. Logged to
     * MEMORY/OBSERVABILITY/model-verification.jsonl. */
    modelDowngraded?: boolean;
@@ -85,7 +86,7 @@ index b0408f9..806552b 100755
  }
  
  // Level configurations — models resolve via models.ts EFFORT_MODEL (the single
-@@ -202,12 +208,18 @@ function logModelVerification(entry: Record<string, unknown>): void {
+@@ -202,12 +209,18 @@ function logModelVerification(entry: Record<string, unknown>): void {
  /**
   * Run inference with configurable level
   */
@@ -106,7 +107,7 @@ index b0408f9..806552b 100755
  
    return new Promise((resolve) => {
      // Unset CLAUDECODE so nested `claude` invocations don't trigger the
-@@ -231,6 +243,14 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -231,6 +244,14 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
      // still be targeted after the child loses its credentials above, so every
      // nested call fails auth (401) and retries until timeout. Force real Anthropic API.
      delete env.ANTHROPIC_BASE_URL;
@@ -121,7 +122,7 @@ index b0408f9..806552b 100755
  
      const hasImages = options.imagePaths && options.imagePaths.length > 0;
  
-@@ -273,7 +293,7 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -273,7 +294,7 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
      let stderr = '';
  
      const proc = spawn(resolveClaudeBin(), args, {
@@ -130,7 +131,7 @@ index b0408f9..806552b 100755
        stdio: ['pipe', 'pipe', 'pipe'],
      });
  
-@@ -362,7 +382,8 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -362,7 +383,8 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
        // any silent downgrade. A `max` call that runs Opus instead of Fable is
        // caught HERE instead of being reported as Fable. Logged for max (Fable
        // audit trail) and for any downgrade at any level.
@@ -140,7 +141,7 @@ index b0408f9..806552b 100755
        const { executed: executedModel, downgraded: modelDowngraded } = verifyExecutedModel(envelope.modelUsage, expectedTier);
        if (executedModel && (modelDowngraded || level === 'max')) {
          logModelVerification({ level, requested: model, expected_tier: expectedTier, executed: executedModel, downgraded: !!modelDowngraded, latency_ms: latencyMs });
-@@ -488,11 +509,39 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -488,11 +510,59 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
   * observability.
   */
  export async function inference(options: InferenceOptions): Promise<InferenceResult> {
@@ -150,7 +151,7 @@ index b0408f9..806552b 100755
 +  // every exec from the same file, so this read only orchestrates the fallback.
 +  let provider: ProviderConfig;
 +  try {
-+    provider = loadProviderConfig();
++    provider = providerFromWrapper();
 +  } catch (e) {
 +    const error = `[Inference] provider config invalid, refusing: ${(e as Error).message}`;
 +    recordProviderEvent({ event: 'config-invalid', error });
@@ -170,6 +171,26 @@ index b0408f9..806552b 100755
 +  return { ...anthropic, provider: 'anthropic', fallbackFrom: local.error };
 +}
 +
++/**
++ * The provider as the claude wrapper itself reads it (`claude --lifeos-gate-query`), so this
++ * process never re-derives the passwd home (Bun's os.userInfo() returns $HOME) or re-reads the
++ * file. Exit 3 is the wrapper refusing (invalid/unreadable config): throw. Any other failure
++ * means a claude without the lifeos-nix gate, which can only reach Anthropic: anthropic-only.
++ */
++function providerFromWrapper(): ProviderConfig {
++  const env = { ...process.env };
++  delete env.CLAUDECODE;
++  const r = spawnSync(resolveClaudeBin(), ['--lifeos-gate-query'], { env, encoding: 'utf8', timeout: 10_000 });
++  if (r.status === 3) throw new Error((r.stderr || 'claude wrapper refused').trim());
++  const out = r.status === 0 ? r.stdout : '';
++  const sep = out.indexOf('\n---\n');
++  if (!out.startsWith('mode=') || sep < 0) return ANTHROPIC_ONLY;
++  const mode = out.slice('mode='.length, out.indexOf('\n'));
++  const cfg = parseConf(out.slice(sep + 5), 'inference.conf (via claude --lifeos-gate-query)');
++  if (mode && cfg.mode !== mode) throw new Error(`wrapper read mode=${mode}, parsed ${cfg.mode}`);
++  return cfg;
++}
++
 +async function inferenceOnTarget(options: InferenceOptions, target?: Target): Promise<InferenceResult> {
 +  const local = typeof target === 'object' ? target : undefined;
    const level = normalizeLevel(options.level);
@@ -181,7 +202,7 @@ index b0408f9..806552b 100755
    if (first.success || level !== 'max') return first;
    // The fallback only buys resilience if it resolves to a DIFFERENT model than
    // the one that just failed. Compare at the TIER level (EFFORT_MODEL), not the
-@@ -507,13 +556,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
+@@ -507,13 +577,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
      EFFORT_MODEL.high !== EFFORT_MODEL.max ? 'high'
      : EFFORT_MODEL.medium !== EFFORT_MODEL.max ? 'medium'
      : 'low';
@@ -201,7 +222,7 @@ index b0408f9..806552b 100755
  }
  
  
-@@ -570,6 +624,9 @@ async function main() {
+@@ -570,6 +645,9 @@ async function main() {
    if (result.executedModel) {
      console.error(`[model] requested=${level} → executed=${result.executedModel}${result.modelDowngraded ? '  ⚠️ DOWNGRADED from requested tier' : ''}`);
    }
@@ -213,10 +234,10 @@ index b0408f9..806552b 100755
      if (expectJson && result.parsed) {
 diff --git a/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
 new file mode 100644
-index 0000000..44285f6
+index 0000000..a672880
 --- /dev/null
 +++ b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
-@@ -0,0 +1,413 @@
+@@ -0,0 +1,419 @@
 +#!/usr/bin/env bun
 +/**
 + * InferenceProvider.ts — which model server `claude` talks to, decided at every exec.
@@ -248,17 +269,17 @@ index 0000000..44285f6
 + * room (ISA Step 7c). Kept here: static, cheap switches that do not chase Claude Code.
 + *
 + * Fail-closed rules:
-+ *   - A present section with an unknown key or bad value THROWS (a typo must not pick a mode).
++ *   - A line that is not a comment or known_key=value, a repeated key or a bad value THROWS.
 + *   - local-only never fails over. local-with-fallback fails over only when explicitly asked
 + *     (LIFEOS_INFERENCE_TARGET=anthropic, set by Inference.ts) or when the server is down.
 + *
-+ * CLI: `bun InferenceProvider.ts` prints the resolved config and local health;
-+ *      `bun InferenceProvider.ts gate` prints shell code for the claude wrapper (see gate()).
++ * CLI: `bun InferenceProvider.ts <inference.conf>` prints the resolved config and local health;
++ *      `gate --conf <path> --mode <mode>` (text on stdin) is the claude wrapper's call (see gate()).
 + */
 +
 +import { appendFileSync, mkdirSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 +import { join } from "node:path";
-+import { homedir, userInfo } from "node:os";
++import { homedir } from "node:os";
 +
 +/** Where inference.conf lives, relative to the account's home. */
 +export const CONF_RELATIVE = ".claude/LIFEOS/USER/CONFIG/inference.conf";
@@ -380,8 +401,9 @@ index 0000000..44285f6
 + * the same line rule in shell, so both read the file the same way. */
 +export function parseConf(text: string, where = "inference.conf"): ProviderConfig {
 +  const kv: Record<string, string> = {};
-+  text.split("\n").forEach((raw, i) => {
-+    const line = raw.replace(/\r$/, "");
++  // The wrapper's normalisation: CR dropped, NUL turned into a space (which the line rule then
++  // rejects). Identical here so both read any byte sequence the same way.
++  text.replace(/\r/g, "").replace(/\0/g, " ").split("\n").forEach((line, i) => {
 +    if (/^\s*(#.*)?$/.test(line)) return;
 +    const m = line.match(CONF_LINE);
 +    if (!m) throw new Error(`${where}:${i + 1}: expected key=value (no spaces, no quotes)`);
@@ -392,6 +414,9 @@ index 0000000..44285f6
 +  });
 +  const hasLocal = ["base_url", "model", "model_fable", "model_opus", "model_sonnet", "model_haiku", "token_env"].some((k) => k in kv);
 +  if (!("mode" in kv) && !hasLocal) return ANTHROPIC_ONLY;
++  // Explicit anthropic-only: the local settings are not read, so they are not judged either —
++  // the wrapper takes this path without parsing them, and both must agree.
++  if (kv.mode === "anthropic-only") return ANTHROPIC_ONLY;
 +  const models: Record<string, string> = {};
 +  for (const t of TIERS) if (kv[`model_${t}`] !== undefined) models[t] = kv[`model_${t}`];
 +  return resolveProviderConfig({
@@ -405,16 +430,9 @@ index 0000000..44285f6
 +  }, where);
 +}
 +
-+/** inference.conf under the account's passwd home. LIFEOS_INFERENCE_CONF overrides it for
-+ * in-process readers (Inference.ts, tests) only; the claude wrapper never reads that variable
-+ * and hands the gate its path explicitly, so the per-exec decision cannot be steered by env. */
-+export function confPath(env: Env = process.env): string {
-+  return env.LIFEOS_INFERENCE_CONF || join(userInfo().homedir, CONF_RELATIVE);
-+}
-+
 +/** Read and validate inference.conf. Absent (ENOENT) → anthropic-only; unreadable or invalid →
 + * throws, never a quiet anthropic-only. */
-+export function loadProviderConfig(path: string = confPath()): ProviderConfig {
++export function loadProviderConfig(path: string): ProviderConfig {
 +  let text: string;
 +  try {
 +    text = readFileSync(path, "utf8");
@@ -447,7 +465,7 @@ index 0000000..44285f6
 + * Under local-only, two static privacy switches go on; they never need updating.
 + */
 +export function localEnv(base: Env, cfg: ProviderConfig): Env {
-+  if (!cfg.local) throw new Error("localEnv: no [inference.local] configured");
++  if (!cfg.local) throw new Error("localEnv: no local server configured");
 +  const { local } = cfg;
 +  const env = { ...base };
 +  for (const k of LOCAL_KEYS) delete env[k];
@@ -594,9 +612,16 @@ index 0000000..44285f6
 + * exits 0, or prints the reason on stderr and exits 3. The wrapper refuses to exec on any
 + * non-zero exit or a missing sentinel, so a crash here is a refusal too.
 + */
-+async function gate(conf: string): Promise<never> {
++async function gate(conf: string, shellMode: string): Promise<never> {
 +  const env = process.env as Env;
-+  const d = await decide(env, () => loadProviderConfig(conf), localHealthy);
++  // The text the wrapper read (stdin), never a second read of the file: an editor rewriting it
++  // in between must not turn the wrapper's local-only into the gate's anthropic-only (review 7).
++  const text = await Bun.stdin.text();
++  const d = await decide(env, () => {
++    const cfg = parseConf(text, conf);
++    if (shellMode && cfg.mode !== shellMode) throw new Error(`wrapper read mode=${shellMode}, gate parsed ${cfg.mode}`);
++    return cfg;
++  }, localHealthy);
 +  if (d.action === "refuse") {
 +    recordProviderEvent({ event: "refused", surface: "gate", reason: d.reason });
 +    console.error(`❌ ${d.reason}`);
@@ -613,16 +638,18 @@ index 0000000..44285f6
 +if (import.meta.main) {
 +  if (process.argv[2] === "gate") {
 +    try {
-+      // The wrapper passes the path it read; the gate never derives it from env.
-+      if (process.argv[3] !== "--conf" || !process.argv[4]) throw new Error("usage: gate --conf <path>");
-+      await gate(process.argv[4]);
++      // usage: gate --conf <path, for messages> --mode <wrapper's mode or ""> < text
++      const [, , , c, conf, m, mode] = process.argv;
++      if (c !== "--conf" || !conf || m !== "--mode" || mode === undefined) throw new Error("usage: gate --conf <path> --mode <mode>");
++      await gate(conf, mode);
 +    } catch (e) {
 +      console.error(`❌ inference gate crashed: ${(e as Error).message}`);
 +      process.exit(3);
 +    }
 +  }
 +  try {
-+    const cfg = loadProviderConfig();
++    if (!process.argv[2]) throw new Error("usage: InferenceProvider.ts <path to inference.conf> | gate --conf <path> --mode <mode>");
++    const cfg = loadProviderConfig(process.argv[2]);
 +    const healthy = cfg.local ? await localHealthy(cfg) : undefined;
 +    console.log(JSON.stringify({ ...cfg, localHealthy: healthy }, null, 2));
 +  } catch (e) {

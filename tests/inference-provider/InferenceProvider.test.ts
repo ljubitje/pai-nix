@@ -42,6 +42,10 @@ test("a full local config parses, CRLF and comments allowed", () => {
   expect(c.local!.tokenEnv).toBe("ISKRA_TOKEN");
 });
 
+test("explicit anthropic-only does not judge the local settings it will not use", () => {
+  expect(parseConf("mode=anthropic-only\nbase_url=https://api.anthropic.com\n")).toEqual(ANTHROPIC_ONLY);
+});
+
 test("no mode + base_url defaults to local-with-fallback", () => {
   expect(parseConf("base_url=http://x\nmodel=m\n").mode).toBe("local-with-fallback");
 });
@@ -54,6 +58,8 @@ test.each([
   ['[inference]\nmode = "local-only"\n', /key=value/],       // TOML is not this format
   ["mode=local-only\n", /needs base_url= and model=/],
   ["mode=local-only\nbase_url=http://x\nmodel=m\ntoken_env=ANTHROPIC_AUTH_TOKEN\n", /ANTHROPIC_/],
+  ["mode=anthropic-\0only\n", /key=value/],                // NUL becomes a space, like the wrapper
+  ["mode=anthropic-only\nfoo=1\n", /unknown key "foo"/],
 ])("invalid inference.conf refuses loudly: %j", (text, msg) => {
   expect(() => parseConf(text, "/x/inference.conf")).toThrow(msg);
 });
@@ -370,6 +376,58 @@ test("gate: LIFEOS_GATE=off — plain claude except where the conf may say local
   }
 });
 
+// The wrapper and parseConf must agree on every file: same verdict, same mode.
+test.each([
+  ["mode=anthropic-only\r\n"],
+  ["# only a comment\r\n\n"],
+  ["mode=anthropic-only\nbase_url=https://api.anthropic.com\n"],
+  ["mode=anthropic-only\nfoo=1\n"],
+  ["mode=anthropic-only\nmode=anthropic-only\n"],
+  ["mode=anthropic-only\nbase_url=http://a\nbase_url=http://b\n"],
+  ["mode=anthropic-\0only\n"],
+  ["#\rcomment\nmode=anthropic-only\n"],
+  ["base_url=http://x\nmodel=m\n"],
+  ["mode=local-only\n"],
+  ["mode = local-only\n"],
+  ["mode=local-only\nbase_url=http://x\nmodel=m\n"],
+])("wrapper and parseConf agree on %j", async (text) => {
+  conf(text);
+  reset();
+  const q = Bun.spawnSync([GATE, "--lifeos-gate-query"], { env: process.env as any });
+  let ts: string;
+  try { ts = parseConf(text).mode; } catch { ts = "refuse"; }
+  const out = q.stdout.toString();
+  const shellMode = out.match(/^mode=(.*)$/m)?.[1];
+  // The wrapper owns two verdicts — refuse, and anthropic-only (no gate run). For a local or
+  // missing mode it hands the same text to the gate, which parses it with parseConf and must
+  // agree with the mode the wrapper saw.
+  if (q.exitCode === 3) expect(ts).toBe("refuse");
+  else if (shellMode === "anthropic-only") expect(ts).toBe("anthropic-only");
+  else {
+    expect(ts).not.toBe("anthropic-only");
+    if (shellMode && ts !== "refuse") expect(ts).toBe(shellMode);
+  }
+  expect(spawns().length).toBe(0); // a query never reaches the real binary
+  conf(null);
+});
+
+test("gate: the gate refuses when its parse disagrees with the wrapper's mode (no second read)", async () => {
+  const p = Bun.spawn(["bun", "--no-env-file", join(import.meta.dir, "InferenceProvider.ts"), "gate", "--conf", "x", "--mode", "local-only"],
+    { stdin: new Blob(["mode=anthropic-only\n"]), stdout: "pipe", stderr: "pipe" });
+  expect(await p.exited).toBe(3);
+  expect(await new Response(p.stderr).text()).toMatch(/wrapper read mode=local-only/);
+});
+
+test("gate: a CRLF or comment-only file is plain claude, as on upstream", async () => {
+  for (const text of ["mode=anthropic-only\r\n", "# nothing\r\n"]) {
+    const h = otherHome("crashing-gate", "process.exit(9);\n");
+    conf(text, h);
+    const r = await claude({ FAKE_PW_HOME: h });
+    expect(r.code).toBe(0);
+    expect(r.spawns.length).toBe(1);
+  }
+});
+
 test("gate: an exported SHELLOPTS (errexit, xtrace) neither breaks the wrapper nor prints the token", async () => {
   conf(`mode=local-only\nbase_url=${base()}\nmodel=big-local\ntoken_env=SECRET_TOK\n`);
   const r = await claude({ SHELLOPTS: "errexit:xtrace", SECRET_TOK: "tok-123" });
@@ -435,6 +493,19 @@ test("inference, local-only fails: error, and every spawn went local", async () 
   expect(r.success).toBe(false);
   expect(s.length).toBeGreaterThan(0);
   expect(s.every((x) => x.env.ANTHROPIC_BASE_URL === base())).toBe(true);
+});
+
+test("inference reads the mode through the wrapper, so $HOME cannot move it", async () => {
+  conf(localConf("local-with-fallback"));
+  process.env.FAKE_LOCAL_FAIL = "0";
+  const saved = process.env.HOME;
+  process.env.HOME = join(saved!, "elsewhere");
+  try {
+    const r = await infer();
+    expect(r.provider).toBe("local");
+  } finally {
+    process.env.HOME = saved;
+  }
 });
 
 test("inference, invalid config: error, zero spawns", async () => {

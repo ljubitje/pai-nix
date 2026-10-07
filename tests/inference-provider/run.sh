@@ -67,8 +67,8 @@ gate_copy "$TREE/nopw-gate/claude" "$TREE/pw-none"
 cd "$ROOT/LIFEOS/TOOLS"
 # A clean environment: nothing from the shell that runs the suite (a local session's
 # ANTHROPIC_*/LIFEOS_* variables, XDG dirs, bun caches) can reach the code under test.
-env -i PATH="$TREE/home/bin:$PATH" HOME="$TREE/home" TMPDIR="$TREE/tmp" \
+BUN_DIR="$(dirname "$(command -v bun)")"   # absolute, so the clean env below never depends on the caller's PATH
+env -i PATH="$TREE/home/bin:$BUN_DIR:$PATH" HOME="$TREE/home" TMPDIR="$TREE/tmp" \
   XDG_CACHE_HOME="$TREE/cache" XDG_CONFIG_HOME="$TREE/config" \
   SPAWNS_FILE="$TREE/home/spawns.jsonl" NOPW_GATE="$TREE/nopw-gate/claude" \
-  LIFEOS_INFERENCE_CONF="$TREE/home/.claude/LIFEOS/USER/CONFIG/inference.conf" \
   bash -c 'mkdir -p "$TMPDIR" && exec bun test InferenceProvider.test.ts'
