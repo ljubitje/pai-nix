@@ -1,44 +1,45 @@
 #!@bash@/bin/bash
 # lifeos-nix inference gate for claude — see default.nix. Decides the model server for this
 # exec via LifeOS's InferenceProvider.ts, then execs the real binary in place (TTY, signals
-# and exit code stay the real claude's). Every path that cannot prove a decision refuses.
+# and exit code stay the real claude's). It routes; it does not try to list what Claude Code
+# can do that reaches Anthropic (that is the network room's job, ISA Step 7c). Every path that
+# cannot prove a decision refuses.
 real=@real@
 refuse() { echo "❌ claude: $*" >&2; exit 3; }
 
-# The marker is inherited from a local-only session: such a descendant may never leave the gate.
-sticky=0; [ "${LIFEOS_INFERENCE_MODE:-}" = local-only ] && sticky=1
-if [ "${LIFEOS_GATE:-}" = off ]; then
-  [ "$sticky" = 1 ] && refuse "LIFEOS_GATE=off is not allowed inside a local-only session"
-  exec "$real" "$@"
-fi
-
-# Where LifeOS lives. CLAUDE_CONFIG_DIR first, then the account's home from passwd (not $HOME,
-# which a caller can unset or point elsewhere while claude itself still finds the real home).
-# Store paths, not the caller's PATH: Pulse's unit PATH has no getent (review 3).
+# Where LifeOS may live: CLAUDE_CONFIG_DIR, the account's home from passwd, and $HOME (a uid
+# passwd cannot resolve still has its LifeOS found). Store paths, not the caller's PATH:
+# Pulse's unit PATH has no getent.
 pwhome="$(@getent@/bin/getent passwd "$(@coreutils@/bin/id -u)" | @coreutils@/bin/cut -d: -f6)"
-# A uid passwd cannot resolve (container --user, sssd/LDAP the nix glibc cannot load) only
-# matters inside a local-only session; anywhere else it just means no passwd candidate.
-[ -n "$pwhome" ] || [ "$sticky" = 0 ] || refuse "cannot resolve this account's home from passwd"
-# Fast path: outside a local session, a config that never mentions inference is
-# anthropic-only, so exec straight away, without a bun start and a TOML parse per claude
-# (review 4). Any mention, a local parent, or the marker takes the full gate below.
-if [ "$sticky" = 0 ] && [ -z "${LIFEOS_INFERENCE_LOCAL:-}" ] \
-   && ! @gnugrep@/bin/grep -qs 'inference' "${LIFEOS_CONFIG_PATH:-${HOME:-$pwhome}/.claude/LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml}" \
-   && { [ -z "$pwhome" ] || ! @gnugrep@/bin/grep -qs 'inference' "$pwhome/.claude/LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml"; }; then
+roots=()
+for r in "${CLAUDE_CONFIG_DIR:-}" "${pwhome:+$pwhome/.claude}" "${HOME:+$HOME/.claude}"; do
+  [ -n "$r" ] && roots+=("$r")
+done
+
+# Could any config this exec might use be asking for local-only? A file that exists but cannot
+# be searched (unreadable, I/O error) counts as yes: only grep's "no match" (exit 1) is a no.
+names_local_only() {
+  local f rc
+  for f in "${LIFEOS_CONFIG_PATH:-}" "${roots[@]/%//LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml}"; do
+    [ -n "$f" ] && [ -e "$f" ] || continue
+    @gnugrep@/bin/grep -qE 'local-only|\\[uU][0-9a-fA-F]{4}' "$f"; rc=$?
+    [ "$rc" = 1 ] || return 0
+  done
+  return 1
+}
+
+if [ "${LIFEOS_GATE:-}" = off ]; then
+  names_local_only && refuse "LIFEOS_GATE=off is not allowed while a config may name local-only"
   exec "$real" "$@"
 fi
 
 gate=""
-for root in "${CLAUDE_CONFIG_DIR:-}" "${pwhome:+$pwhome/.claude}"; do
-  if [ -n "$root" ] && [ -f "$root/LIFEOS/TOOLS/InferenceProvider.ts" ]; then
-    gate="$root/LIFEOS/TOOLS/InferenceProvider.ts"; break
-  fi
+for r in "${roots[@]}"; do
+  if [ -f "$r/LIFEOS/TOOLS/InferenceProvider.ts" ]; then gate="$r/LIFEOS/TOOLS/InferenceProvider.ts"; break; fi
 done
 if [ -z "$gate" ]; then
-  [ "$sticky" = 1 ] && refuse "local-only session but the inference gate is missing"
-  # No gate, but a config that names local-only (e.g. payload not yet synced): refuse.
-  [ -n "$pwhome" ] && @gnugrep@/bin/grep -qs 'local-only' "$pwhome/.claude/LIFEOS/USER/CONFIG/LIFEOS_CONFIG.toml" \
-    && refuse "LIFEOS_CONFIG.toml mentions local-only but the inference gate is missing"
+  # No gate (no LifeOS, or a payload not yet synced): plain claude, unless local-only is asked.
+  names_local_only && refuse "a config may name local-only but the inference gate is missing"
   exec "$real" "$@"
 fi
 
@@ -47,11 +48,9 @@ fi
 # last line must be the sentinel, or the gate did not speak the protocol (e.g. an older
 # payload) and we refuse.
 export HOME="${HOME:-$pwhome}"
-cwd="$PWD"   # the gate checks the caller's project settings, so it needs the real cwd
-code="$(cd / && LIFEOS_GATE_CWD="$cwd" @bun@/bin/bun --no-env-file --config=/dev/null "$gate" gate "$@" 3>&1 1>&2)" || exit 3
+code="$(cd / && @bun@/bin/bun --no-env-file --config=/dev/null "$gate" gate 3>&1 1>&2)" || exit 3
 [ "${code##*$'\n'}" = ": lifeos-gate-ok" ] || refuse "inference gate gave no decision (stale LifeOS payload?)"
-# eval's status is the sentinel's (always 0), so a failing export/unset would go unseen:
-# apply once under set -e in a subshell to prove it applies cleanly, then for real.
+# eval's status is the sentinel's (always 0), so prove the delta applies under set -e first.
 # Own line, status read after: on the left of `||` bash ignores set -e, even in a subshell.
 ( set -e; eval "$code" ) >/dev/null 2>&1
 [ $? -eq 0 ] || refuse "inference gate output did not apply"
