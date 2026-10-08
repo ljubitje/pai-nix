@@ -343,6 +343,7 @@ test("gate: a CLAUDE_CONFIG_DIR inference.conf that means something else refuses
   expect(await run("mode=anthropic-only\n", a)).toBe(3);
   expect(await run(a, b)).toBe(3);
   expect(await run(a, a)).toBe(0);                                          // same text
+  expect(await run(a, `# copy\r\nmodel=big-local\r\nbase_url=${base()}\r\nmode=local-only\r\n`)).toBe(0); // same settings, CRLF, comment, order
   expect(await run("mode=anthropic-only\n", "# other\nmode=anthropic-only\n")).toBe(0); // both anthropic-only
   expect(await run(a, null)).toBe(0);                                       // no file there
   expect((await claude({ CLAUDE_CONFIG_DIR: join(HOME, ".claude") })).code).toBe(0);
@@ -465,6 +466,13 @@ const AGREE: string[] = [
 // Both locales: a real session runs under UTF-8, where bash's [[:space:]] is Unicode-aware
 // unless the wrapper pins LC_ALL=C for its parse.
 const LOCALES = [["C"], ["en_US.UTF-8"]] as const;
+
+test("positive control: the UTF-8 leg really runs bash in a Unicode locale", () => {
+  const probe = (locale: string) => Bun.spawnSync([Bun.which("bash")!, "-c", 'x=$\'\u3000\'; [[ $x =~ ^[[:space:]]$ ]] && echo space || echo other'],
+    { env: { ...process.env, LANG: locale, LC_ALL: locale } as any }).stdout.toString().trim();
+  expect(probe("C")).toBe("other");
+  expect(probe("en_US.UTF-8")).toBe("space"); // else the UTF-8 agreement cases only repeat C
+});
 test.each(AGREE.flatMap((t) => LOCALES.map(([l]) => [t, l])))("wrapper and parseConf agree on %j (%s)", async (text, locale) => {
   conf(text);
   reset();

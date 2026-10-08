@@ -16,8 +16,9 @@ set +e +u +x +v +o pipefail
 real=@real@
 refuse() { echo "❌ claude: $*" >&2; exit 3; }
 
-# parse_conf FILE: sets conf_mode ("" = no mode line but settings present: the gate decides)
-# and conf_text (normalised), or refuses. Same rules as InferenceProvider.parseConf: NUL
+# parse_conf FILE: sets conf_mode ("" = no mode line but settings present: the gate decides),
+# conf_text (normalised) and conf_settings (the settings in a fixed key order, so comments,
+# blank lines, key order and CRLF do not count), or refuses. Same rules as InferenceProvider.parseConf: NUL
 # becomes a space and CR a newline; each line a comment, blank, or known_key=value with no
 # whitespace in the value; no key twice. Pure bash after one tr: no grep/sort per exec.
 parse_conf() {
@@ -34,8 +35,13 @@ parse_conf() {
     [ -z "${seen[$key]:-}" ] || refuse "$f:$n: $key given twice"
     seen[$key]=1
     settings=$((settings + 1))
+    seen[$key]="${line#*=}"
     [ "$key" = mode ] && conf_mode="${line#mode=}"
   done <<< "$conf_text"
+  conf_settings=""
+  for key in mode base_url model model_fable model_opus model_sonnet model_haiku token_env; do
+    [ -n "${seen[$key]:-}" ] && conf_settings+="$key=${seen[$key]}"$'\n'
+  done
   case "$conf_mode" in
     "")                  [ "$settings" = 0 ] && conf_mode=anthropic-only ;;
     anthropic-only|local-with-fallback|local-only) ;;
@@ -48,7 +54,7 @@ parse_conf() {
 read_conf() {
   if [ -e "$1" ]; then parse_conf "$1"
   elif [ -L "$1" ]; then refuse "$1 is a link to nothing"
-  else conf_mode=anthropic-only; conf_text=""
+  else conf_mode=anthropic-only; conf_text=""; conf_settings=""
   fi
 }
 
@@ -69,15 +75,15 @@ for c in .claude LIFEOS USER CONFIG; do
 done
 
 read_conf "$conf"
-mode="$conf_mode"; text="$conf_text"
+mode="$conf_mode"; text="$conf_text"; settings="$conf_settings"
 
 # A second LifeOS (the launcher honours CLAUDE_CONFIG_DIR) with an inference.conf that means
-# something else is ambiguous; refuse rather than ignore it. Fine: no file there, both
-# anthropic-only, or the same text (which is also what the same tree reads as).
+# something else is ambiguous; refuse rather than ignore it. Fine: the same tree, no file
+# there, both anthropic-only, or the same settings.
 other="${CLAUDE_CONFIG_DIR:+$CLAUDE_CONFIG_DIR/LIFEOS/USER/CONFIG/inference.conf}"
-if [ -n "$other" ] && { [ -e "$other" ] || [ -L "$other" ]; }; then
+if [ -n "$other" ] && [ "${CLAUDE_CONFIG_DIR%/}" != "$home/.claude" ] && { [ -e "$other" ] || [ -L "$other" ]; }; then
   read_conf "$other"
-  if ! { [ "$conf_mode" = anthropic-only ] && [ "$mode" = anthropic-only ]; } && [ "$conf_text" != "$text" ]; then
+  if ! { [ "$conf_mode" = anthropic-only ] && [ "$mode" = anthropic-only ]; } && [ "$conf_settings" != "$settings" ]; then
     refuse "CLAUDE_CONFIG_DIR's inference.conf differs from $conf; this gate reads the latter only"
   fi
 fi
