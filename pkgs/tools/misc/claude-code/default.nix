@@ -58,6 +58,9 @@ stdenv.mkDerivation (finalAttrs: {
 
     installBin $src
 
+    # LifeOS hooks are `#!/usr/bin/env bun` scripts and claude runs them with its own PATH, so a
+    # claude not started by the `lifeos` launcher (Pulse, Inference.ts, bare `claude`) needs bun.
+    # --suffix, not --prefix: a bun from the project's own devshell must still win.
     wrapProgram $out/bin/claude \
       --set DISABLE_AUTOUPDATER 1 \
       --set-default FORCE_AUTOUPDATE_PLUGINS 1 \
@@ -74,9 +77,6 @@ stdenv.mkDerivation (finalAttrs: {
             procps
             # https://code.claude.com/docs/en/troubleshooting#search-and-discovery-issues
             ripgrep
-            # LifeOS hooks are `#!/usr/bin/env bun` scripts; claude runs them with its own PATH, so a
-            # claude not started by the `lifeos` launcher (Pulse, Inference.ts, bare `claude`) needs bun here
-            bun
           ]
           # the following packages are required for the sandbox to work (Linux only)
           ++ lib.optionals stdenv.hostPlatform.isLinux [
@@ -84,7 +84,8 @@ stdenv.mkDerivation (finalAttrs: {
             socat
           ]
         )
-      }
+      } \
+      --suffix PATH : ${lib.makeBinPath [ bun ]}
 
     # lifeos-nix: inference gate. bin/claude becomes a thin script (claude-gate.sh) that reads
     # LIFEOS/USER/CONFIG/inference.conf under the account's passwd home before exec'ing the
@@ -114,6 +115,9 @@ stdenv.mkDerivation (finalAttrs: {
   versionCheckProgramArg = "--version";
 
   passthru.updateScript = ./update.sh;
+  # The one bun LifeOS runs on: lifeos and the Pulse unit take it from here, so they cannot drift
+  # from the bun the claude wrapper hands to hooks.
+  passthru.bun = bun;
 
   meta = {
     description = "Agentic coding tool that lives in your terminal, understands your codebase, and helps you code faster";
