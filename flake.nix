@@ -29,7 +29,10 @@
         # claude-code is closed source (unfree). The consumer consents explicitly, on their own
         # system, instead of this flake switching the gate off inside its own nixpkgs instance.
         assertions = [{
-          assertion = (pkgs.config.allowUnfree or false) || (pkgs.config.allowUnfreePredicate or (_: false)) own.claude-code;
+          # tryEval: a consumer predicate that throws on a derivation counts as "no", so they still get
+          # the message below instead of a stack trace out of their own predicate.
+          assertion = (pkgs.config.allowUnfree or false)
+            || (let r = builtins.tryEval ((pkgs.config.allowUnfreePredicate or (_: false)) own.claude-code); in r.success && r.value);
           message = "lifeos bundles claude-code, which is unfree: set nixpkgs.config.allowUnfree = true (or allow it in nixpkgs.config.allowUnfreePredicate).";
         }];
 
