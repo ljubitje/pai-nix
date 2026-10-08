@@ -455,15 +455,20 @@ const AGREE: string[] = [
   "mode=anthropic-only\nbase_url=http://x\u00a0y\n",
   "\u00a0\nmode=anthropic-only\n",
   "\ufeffmode=anthropic-only\n",
+  "mode=anthropic-only\n\u3000\n",                     // blank only to a Unicode-aware reader
+  "mode=anthropic-only\n\u2028\n",
   "base_url=http://x\nmodel=m\n",
   "mode=local-only\n",
   "mode = local-only\n",
   "mode=local-only\nbase_url=http://x\nmodel=m\n",
 ];
-test.each(AGREE.map((t) => [t]))("wrapper and parseConf agree on %j", async (text) => {
+// Both locales: a real session runs under UTF-8, where bash's [[:space:]] is Unicode-aware
+// unless the wrapper pins LC_ALL=C for its parse.
+const LOCALES = [["C"], ["en_US.UTF-8"]] as const;
+test.each(AGREE.flatMap((t) => LOCALES.map(([l]) => [t, l])))("wrapper and parseConf agree on %j (%s)", async (text, locale) => {
   conf(text);
   reset();
-  const q = Bun.spawnSync([GATE, "--lifeos-gate-query"], { env: process.env as any });
+  const q = Bun.spawnSync([GATE, "--lifeos-gate-query"], { env: { ...process.env, LANG: locale, LC_ALL: locale } as any });
   const verdict = (f: () => ProviderConfig) => { try { return f().mode; } catch { return "refuse"; } };
   const direct = verdict(() => parseConf(text));
   const out = q.stdout.toString();
@@ -596,7 +601,7 @@ test("inference reads the mode through the wrapper, so $HOME cannot move it", as
   }
 });
 
-test("inference: a claude that cannot answer the gate query is recorded, not silently trusted", async () => {
+test("inference: a claude that cannot answer the gate query is recorded, then takes the upstream path (known limit)", async () => {
   conf(localConf("local-only"));
   reset();
   // A separate process (Bun.which fixes PATH at start) whose only claude is the ungated fake:
@@ -608,6 +613,10 @@ test("inference: a claude that cannot answer the gate query is recorded, not sil
   await p.exited;
   expect(events()).toContain("query-failed");
   expect(await new Response(p.stderr).text()).toMatch(/gave no answer/);
+  // What that means, stated rather than hidden: the ungated binary ran with no local env.
+  const s = spawns().filter((x) => x.model !== "default");
+  expect(s.length).toBeGreaterThan(0);
+  expect(s.every((x) => x.env.ANTHROPIC_BASE_URL === undefined)).toBe(true);
 });
 
 test("inference: a token_env naming an unset variable is an error, not a fallback", async () => {

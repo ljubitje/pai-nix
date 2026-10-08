@@ -58,7 +58,6 @@ gate_copy() {     # $1 = output path, $2 = getent dir. The gate exactly as the d
       -e "s|@real@|$TREE/real/claude|g" \
       -e "s|@getent@|$2|g" \
       -e "s|@coreutils@|$(dirname "$(dirname "$(command -v id)")")|g" \
-      -e "s|@gnugrep@|$(dirname "$(dirname "$(command -v grep)")")|g" \
       "$REPO/pkgs/tools/misc/claude-code/claude-gate.sh" > "$1"
   chmod +x "$1"
 }
@@ -72,4 +71,5 @@ BUN_DIR="$(dirname "$(command -v bun)")"   # absolute, so the clean env below ne
 env -i PATH="$TREE/home/bin:$BUN_DIR:$PATH" HOME="$TREE/home" TMPDIR="$TREE/tmp" \
   XDG_CACHE_HOME="$TREE/cache" XDG_CONFIG_HOME="$TREE/config" \
   SPAWNS_FILE="$TREE/home/spawns.jsonl" NOPW_GATE="$TREE/nopw-gate/claude" FAKE_REAL_DIR="$TREE/real" \
+  ${LOCALE_ARCHIVE:+LOCALE_ARCHIVE="$LOCALE_ARCHIVE"} \
   bash -c 'mkdir -p "$TMPDIR" && exec bun test InferenceProvider.test.ts' </dev/null
