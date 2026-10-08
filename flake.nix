@@ -24,6 +24,13 @@
       # nixosModule that installs the lifeos package system-wide, built from the consumer's pkgs.
       lifeosModule = { pkgs, system ? pkgs.stdenv.hostPlatform.system, ... }:
       let own = mkPackages pkgs; in {
+        # claude-code is closed source (unfree). The consumer consents explicitly, on their own
+        # system, instead of this flake switching the gate off inside its own nixpkgs instance.
+        assertions = [{
+          assertion = pkgs.config.allowUnfree || (pkgs.config.allowUnfreePredicate or (_: false)) own.claude-code;
+          message = "lifeos bundles claude-code, which is unfree: set nixpkgs.config.allowUnfree = true (or allow it in nixpkgs.config.allowUnfreePredicate).";
+        }];
+
         environment.systemPackages = [
           own.lifeos
           # LifeOS ships ~600 .ts files (hooks, LIFEOS/TOOLS, skill tools) that bun
