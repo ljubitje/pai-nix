@@ -328,16 +328,24 @@ test("gate: a link to nothing anywhere on the conf path refuses; a missing .clau
   expect(plain.spawns.length).toBe(1);
 });
 
-test("gate: a CLAUDE_CONFIG_DIR whose inference.conf says another mode refuses; the same mode, the same tree or none is fine", async () => {
-  conf("mode=anthropic-only\n");
+test("gate: a CLAUDE_CONFIG_DIR inference.conf that means something else refuses", async () => {
   const other = join(HOME, "second-lifeos");
+  const otherConf = join(other, "LIFEOS/USER/CONFIG/inference.conf");
   mkdirSync(join(other, "LIFEOS/USER/CONFIG"), { recursive: true });
-  writeFileSync(join(other, "LIFEOS/USER/CONFIG/inference.conf"), localConf("local-only"));
-  expect((await claude({ CLAUDE_CONFIG_DIR: other })).code).toBe(3);
-  writeFileSync(join(other, "LIFEOS/USER/CONFIG/inference.conf"), "mode=anthropic-only\n");
-  expect((await claude({ CLAUDE_CONFIG_DIR: other })).code).toBe(0);   // two anthropic-only installs
+  const run = async (mine: string, theirs: string | null) => {
+    conf(mine);
+    rmSync(otherConf, { force: true });
+    if (theirs !== null) writeFileSync(otherConf, theirs);
+    return (await claude({ CLAUDE_CONFIG_DIR: other })).code;
+  };
+  const a = localConf("local-only");
+  const b = `mode=local-only\nbase_url=http://127.0.0.1:1\nmodel=big-local\n`; // same mode, other server
+  expect(await run("mode=anthropic-only\n", a)).toBe(3);
+  expect(await run(a, b)).toBe(3);
+  expect(await run(a, a)).toBe(0);                                          // same text
+  expect(await run("mode=anthropic-only\n", "# other\nmode=anthropic-only\n")).toBe(0); // both anthropic-only
+  expect(await run(a, null)).toBe(0);                                       // no file there
   expect((await claude({ CLAUDE_CONFIG_DIR: join(HOME, ".claude") })).code).toBe(0);
-  expect((await claude({ CLAUDE_CONFIG_DIR: join(HOME, "empty-cfgdir") })).code).toBe(0);
 });
 
 test("gate: fallback mode follows server health, with a notice and an event when down", async () => {

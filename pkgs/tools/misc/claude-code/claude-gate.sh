@@ -71,13 +71,15 @@ done
 read_conf "$conf"
 mode="$conf_mode"; text="$conf_text"
 
-# A second LifeOS (the launcher honours CLAUDE_CONFIG_DIR) whose inference.conf says something
-# else is ambiguous; refuse rather than ignore it. The same mode, or no file there, is fine.
+# A second LifeOS (the launcher honours CLAUDE_CONFIG_DIR) with an inference.conf that means
+# something else is ambiguous; refuse rather than ignore it. Fine: no file there, both
+# anthropic-only, or the same text (which is also what the same tree reads as).
 other="${CLAUDE_CONFIG_DIR:+$CLAUDE_CONFIG_DIR/LIFEOS/USER/CONFIG/inference.conf}"
-if [ -n "$other" ] && [ "${CLAUDE_CONFIG_DIR%/}" != "$home/.claude" ] && { [ -e "$other" ] || [ -L "$other" ]; }; then
+if [ -n "$other" ] && { [ -e "$other" ] || [ -L "$other" ]; }; then
   read_conf "$other"
-  [ "$conf_mode" = "$mode" ] \
-    || refuse "CLAUDE_CONFIG_DIR's inference.conf says mode=${conf_mode:-unset}, $conf says mode=${mode:-unset}"
+  if ! { [ "$conf_mode" = anthropic-only ] && [ "$mode" = anthropic-only ]; } && [ "$conf_text" != "$text" ]; then
+    refuse "CLAUDE_CONFIG_DIR's inference.conf differs from $conf; this gate reads the latter only"
+  fi
 fi
 
 # For Inference.ts: the wrapper's own reading, so in-process code never re-derives the home or
