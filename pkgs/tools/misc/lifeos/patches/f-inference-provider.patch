@@ -73,7 +73,7 @@ KNOWN LIMITS
   Claude Code itself can still reach Anthropic outside the gate's view: the network room's job.
 
 VERIFICATION
-  tests/inference-provider/run.sh — 87 tests against the pinned source + patch list and the
+  tests/inference-provider/run.sh — 111 tests against the pinned source + patch list and the
   real gate script, in env -i with a fake passwd (never the runner's own home): parsing and
   refusals, shell/TS agreement on the same bytes, env overlay/strip, the decide() table, the
   gate end to end (no-bun fast path, env steering, invalid/unreadable files, dangling links,
