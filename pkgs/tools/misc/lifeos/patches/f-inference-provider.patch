@@ -283,10 +283,10 @@ index b0408f9..52fd2c4 100755
      if (expectJson && result.parsed) {
 diff --git a/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
 new file mode 100644
-index 0000000..537bbe1
+index 0000000..8f20f19
 --- /dev/null
 +++ b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
-@@ -0,0 +1,423 @@
+@@ -0,0 +1,426 @@
 +#!/usr/bin/env bun
 +/**
 + * InferenceProvider.ts — which model server `claude` talks to, decided at every exec.
@@ -557,7 +557,9 @@ index 0000000..537bbe1
 +
 +const HEALTH_TTL_MS = 30_000;
 +
-+/** Is the local server answering? `GET {base}/v1/models` with the session's own credential.
++/** Is the local server answering? Any HTTP response to `GET {base}/v1/models` counts — the
++ * contract is only /v1/messages, so a 404 or 401 there still means "up" (review 9); only a
++ * connection error or timeout means down.
 + * Cached for 30 s per base_url in $XDG_RUNTIME_DIR. Only the gate's local-with-fallback launch
 + * decision asks; local-only never health-checks. */
 +export async function localHealthy(cfg: ProviderConfig, env: Env = process.env, timeoutMs = 2000): Promise<boolean> {
@@ -579,8 +581,9 @@ index 0000000..537bbe1
 +      headers: { authorization: `Bearer ${token}`, "x-api-key": token },
 +      signal: AbortSignal.timeout(timeoutMs),
 +    });
-+    ok = res.ok;
-+  } catch { /* down */ }
++    void res.body?.cancel();
++    ok = true;
++  } catch { /* no answer: down */ }
 +  if (cacheFile) {
 +    try { writeFileSync(cacheFile, JSON.stringify({ ok, ts: Date.now() }), { mode: 0o600 }); } catch { /* best effort */ }
 +  }

@@ -162,18 +162,23 @@ test("decide: invalid config refuses", async () => {
 // ── the real gate script, end to end ─────────────────────────────────────────────
 
 let server: ReturnType<typeof Bun.serve> | undefined;
-let serverUp = true;
-beforeAll(() => {
-  server = Bun.serve({
-    port: 0,
-    fetch: (req) =>
-      serverUp && new URL(req.url).pathname === "/v1/models"
-        ? Response.json({ data: [{ id: "big-local" }] })
-        : new Response("down", { status: 503 }),
-  });
+let port = 0;
+let modelsStatus = 200;   // what an "up" server answers on /v1/models
+const serve = () => Bun.serve({
+  port,
+  fetch: (req) =>
+    new URL(req.url).pathname === "/v1/models"
+      ? (modelsStatus === 200 ? Response.json({ data: [{ id: "big-local" }] }) : new Response("", { status: modelsStatus }))
+      : new Response("nope", { status: 404 }),
 });
+beforeAll(() => { server = serve(); port = server.port; });
 afterAll(() => server?.stop(true));
-const base = () => `http://127.0.0.1:${server!.port}`;
+/** Up = something answers HTTP on the port; down = nothing listens there (connection refused). */
+async function setUp(up: boolean) {
+  if (up && !server) server = serve();
+  if (!up && server) { server.stop(true); server = undefined; }
+}
+const base = () => `http://127.0.0.1:${port}`;
 const localConf = (mode: string | null) =>
   `${mode ? `mode=${mode}\n` : ""}base_url=${base()}\nmodel=big-local\n`;
 
@@ -236,9 +241,9 @@ test("gate: anthropic-only with an inherited local env goes through the gate and
 
 test("gate: local-only + server down still goes local (fails, never fails over)", async () => {
   conf(localConf("local-only"));
-  serverUp = false;
+  await setUp(false);
   const r = await claude();
-  serverUp = true;
+  await setUp(true);
   expect(r.spawns.length).toBe(1);
   expect(r.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
 });
@@ -327,24 +332,34 @@ test("gate: a CLAUDE_CONFIG_DIR whose inference.conf says another mode refuses; 
 
 test("gate: fallback mode follows server health, with a notice and an event when down", async () => {
   conf(localConf("local-with-fallback"));
-  serverUp = true;
+  await setUp(true);
   const upRun = await claude();
   expect(upRun.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
-  serverUp = false;
+  await setUp(false);
   const downRun = await claude();
-  serverUp = true;
+  await setUp(true);
   expect(downRun.spawns[0].env.ANTHROPIC_BASE_URL).toBeUndefined();
   expect(downRun.stderr).toMatch(/fallback/);
   expect(downRun.events).toEqual(["fallback"]);
+});
+
+test("gate: a server that answers /v1/models with 404 or 401 is up (the contract is /v1/messages)", async () => {
+  conf(localConf("local-with-fallback"));
+  for (const status of [404, 401]) {
+    modelsStatus = status;
+    const r = await claude();
+    expect(r.spawns[0].env.ANTHROPIC_BASE_URL).toBe(base());
+  }
+  modelsStatus = 200;
 });
 
 test("gate: a down server is probed once per cache window, not once per exec", async () => {
   conf(localConf("local-with-fallback"));
   const runtime = join(HOME, "runtime");
   mkdirSync(runtime, { recursive: true });
-  serverUp = false;
+  await setUp(false);
   await claude({ XDG_RUNTIME_DIR: runtime });
-  serverUp = true;
+  await setUp(true);
   const cached = await claude({ XDG_RUNTIME_DIR: runtime });
   expect(cached.spawns[0].env.ANTHROPIC_BASE_URL).toBeUndefined(); // still the cached "down"
   const fresh = await claude({ XDG_RUNTIME_DIR: undefined });
