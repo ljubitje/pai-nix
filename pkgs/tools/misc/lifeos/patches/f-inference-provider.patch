@@ -81,7 +81,7 @@ VERIFICATION
   GATE=off, unresolvable uid), Inference.ts through the wrapper query. Mutation-checked.
 
 diff --git a/LifeOS/install/LIFEOS/TOOLS/Inference.ts b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
-index b0408f9..b223d0b 100755
+index b0408f9..fdf4fd5 100755
 --- a/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 @@ -51,6 +51,7 @@ import { join } from "path";
@@ -159,7 +159,7 @@ index b0408f9..b223d0b 100755
        const { executed: executedModel, downgraded: modelDowngraded } = verifyExecutedModel(envelope.modelUsage, expectedTier);
        if (executedModel && (modelDowngraded || level === 'max')) {
          logModelVerification({ level, requested: model, expected_tier: expectedTier, executed: executedModel, downgraded: !!modelDowngraded, latency_ms: latencyMs });
-@@ -488,11 +509,95 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -488,11 +509,98 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
   * observability.
   */
  export async function inference(options: InferenceOptions): Promise<InferenceResult> {
@@ -217,7 +217,10 @@ index b0408f9..b223d0b 100755
 +      return resolve(ANTHROPIC_ONLY);
 +    }
 +    const timer = setTimeout(() => proc.kill('SIGKILL'), 5000);
-+    proc.stdout!.on('data', (d) => { out += d.toString(); });
++    // Decode as one UTF-8 stream: per-chunk toString() would break a character that straddles
++    // two reads and hand parseConf a different model name than the gate saw (review 9).
++    proc.stdout!.setEncoding('utf8');
++    proc.stdout!.on('data', (d) => { out += d; });
 +    proc.stderr!.on('data', (d) => { err += d.toString(); });
 +    proc.on('error', (e) => {
 +      clearTimeout(timer);
@@ -256,7 +259,7 @@ index b0408f9..b223d0b 100755
    if (first.success || level !== 'max') return first;
    // The fallback only buys resilience if it resolves to a DIFFERENT model than
    // the one that just failed. Compare at the TIER level (EFFORT_MODEL), not the
-@@ -507,13 +612,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
+@@ -507,13 +615,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
      EFFORT_MODEL.high !== EFFORT_MODEL.max ? 'high'
      : EFFORT_MODEL.medium !== EFFORT_MODEL.max ? 'medium'
      : 'low';
@@ -276,7 +279,7 @@ index b0408f9..b223d0b 100755
  }
  
  
-@@ -570,6 +680,9 @@ async function main() {
+@@ -570,6 +683,9 @@ async function main() {
    if (result.executedModel) {
      console.error(`[model] requested=${level} → executed=${result.executedModel}${result.modelDowngraded ? '  ⚠️ DOWNGRADED from requested tier' : ''}`);
    }
@@ -288,7 +291,7 @@ index b0408f9..b223d0b 100755
      if (expectJson && result.parsed) {
 diff --git a/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
 new file mode 100644
-index 0000000..f82038b
+index 0000000..9418310
 --- /dev/null
 +++ b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
 @@ -0,0 +1,435 @@
@@ -470,7 +473,7 @@ index 0000000..f82038b
 +    if (k in kv) throw new Error(`${where}:${i + 1}: "${k}" given twice`);
 +    kv[k] = v;
 +  });
-+  const hasLocal = ["base_url", "model", "model_fable", "model_opus", "model_sonnet", "model_haiku", "token_env"].some((k) => k in kv);
++  const hasLocal = CONF_KEYS.some((k) => k !== "mode" && k in kv);
 +  if (!("mode" in kv) && !hasLocal) return ANTHROPIC_ONLY;
 +  // Explicit anthropic-only: the local settings are not read, so they are not judged either —
 +  // the wrapper takes this path without parsing them, and both must agree.
