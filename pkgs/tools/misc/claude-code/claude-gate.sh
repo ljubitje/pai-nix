@@ -2,66 +2,82 @@
 # lifeos-nix inference gate for claude — see default.nix. Reads the inference mode from
 # LIFEOS/USER/CONFIG/inference.conf under the account's passwd home, exactly and in shell,
 # then execs the real binary in place (TTY, signals and exit code stay the real claude's).
-# anthropic-only (also: no file) costs what upstream costs: no bun, no parse. Local modes ask
-# LifeOS's InferenceProvider.ts for the env. It routes; the local-only guarantee is the
-# network room (ISA Step 7c). Anything that cannot be read exactly refuses.
-# bash imports an exported SHELLOPTS: errexit would kill this script on a zero grep count,
-# xtrace would print the env delta (a local token) to stderr. Start from known options.
+# anthropic-only (also: no file) costs about what upstream costs: one getent, one tr, no bun.
+# Local modes ask LifeOS's InferenceProvider.ts for the env.
+#
+# The bar (Klemen, 2026-10-08): anthropic-only behaves as upstream; local modes route
+# correctly under normal conditions; plain misconfiguration refuses. Edge cases under
+# local-only (unmounted disks, a foreign $HOME, flaky filesystems) are the network room's
+# job (ISA Step 7c), not this script's.
+
+# bash imports an exported SHELLOPTS: errexit would kill this script, xtrace would print the
+# env delta (a local token) to stderr. Start from known options.
 set +e +u +x +v +o pipefail
 real=@real@
 refuse() { echo "❌ claude: $*" >&2; exit 3; }
 
+# parse_conf FILE: sets conf_mode ("" = no mode line but settings present: the gate decides)
+# and conf_text (normalised), or refuses. Same rules as InferenceProvider.parseConf: NUL
+# becomes a space and CR a newline; each line a comment, blank, or known_key=value with no
+# whitespace in the value; no key twice. Pure bash after one tr: no grep/sort per exec.
+parse_conf() {
+  local f="$1" LC_ALL=C line key n=0 settings=0
+  local -A seen=()
+  conf_text="$(@coreutils@/bin/tr '\000\r' ' \n' < "$f")" || refuse "cannot read $f"
+  conf_mode=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    n=$((n + 1))
+    [[ $line =~ ^[[:space:]]*(#.*)?$ ]] && continue
+    [[ $line =~ ^(mode|base_url|model|model_fable|model_opus|model_sonnet|model_haiku|token_env)=[^[:space:]]+$ ]] \
+      || refuse "$f:$n: every line must be a comment or key=value with a known key (no spaces, no quotes)"
+    key="${BASH_REMATCH[1]}"
+    [ -z "${seen[$key]:-}" ] || refuse "$f:$n: $key given twice"
+    seen[$key]=1
+    settings=$((settings + 1))
+    [ "$key" = mode ] && conf_mode="${line#mode=}"
+  done <<< "$conf_text"
+  case "$conf_mode" in
+    "")                  [ "$settings" = 0 ] && conf_mode=anthropic-only ;;
+    anthropic-only|local-with-fallback|local-only) ;;
+    *)                   refuse "$f: mode must be anthropic-only | local-with-fallback | local-only" ;;
+  esac
+}
+
+# read_conf FILE: like parse_conf, but a path that is genuinely not there (no file, no link to
+# nothing) is anthropic-only with no text.
+read_conf() {
+  if [ -e "$1" ]; then parse_conf "$1"
+  elif [ -L "$1" ]; then refuse "$1 is a link to nothing"
+  else conf_mode=anthropic-only; conf_text=""
+  fi
+}
+
 # The account's home from passwd, not $HOME (callers can point $HOME anywhere). $HOME only when
 # passwd cannot resolve the uid (container --user, sssd/LDAP the nix glibc cannot load).
-home="$(@getent@/bin/getent passwd "$(@coreutils@/bin/id -u)" | @coreutils@/bin/cut -d: -f6)"
+pw="$(@getent@/bin/getent passwd "$EUID")"
+home="${pw%:*}"; home="${home##*:}"
 home="${home:-${HOME:-}}"
 [ -n "$home" ] || refuse "cannot tell this account's home (passwd and \$HOME both empty)"
 conf="$home/.claude/LIFEOS/USER/CONFIG/inference.conf"
 
-# A link along the path that points nowhere (an unmounted disk, a moved USER tree) must not
-# read as "no config". Only a path that is genuinely not there is anthropic-only.
+# A link along the path that points nowhere (a moved USER tree) must not read as "no config".
 p="$home"
-for c in .claude LIFEOS USER CONFIG inference.conf; do
+for c in .claude LIFEOS USER CONFIG; do
   p="$p/$c"
   if [ -L "$p" ] && [ ! -e "$p" ]; then refuse "$p is a link to nothing"; fi
   [ -e "$p" ] || break
 done
-# A second LifeOS (the launcher honours CLAUDE_CONFIG_DIR) with its own inference.conf is
-# ambiguous: this gate reads the passwd home's. Refuse rather than silently ignore it.
-if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
-  other="$CLAUDE_CONFIG_DIR/LIFEOS/USER/CONFIG/inference.conf"
-  if [ -e "$other" ] || [ -L "$other" ]; then
-    [ "$(@coreutils@/bin/realpath -m -- "$other")" = "$(@coreutils@/bin/realpath -m -- "$conf")" ] \
-      || refuse "CLAUDE_CONFIG_DIR has its own $other; this gate reads $conf only"
-  fi
-fi
 
-# Read it ONCE; everything below (this script, the gate, Inference.ts via --lifeos-gate-query)
-# decides from this one text. CR is dropped and NUL becomes a space (which then fails the line
-# rule), the same normalisation InferenceProvider.parseConf applies. Absent (ENOENT on a path
-# that is not a dangling link) is anthropic-only; any other read error refuses.
-text="$(LC_ALL=C @coreutils@/bin/cat -- "$conf" 2>&1 | LC_ALL=C @coreutils@/bin/tr -d '\r' | LC_ALL=C @coreutils@/bin/tr '\000' ' '; exit "${PIPESTATUS[0]}")"
-if [ $? -eq 0 ]; then
-  # Same rules as parseConf: each line a comment, blank, or known_key=value without spaces;
-  # no key twice.
-  bad="$(printf '%s\n' "$text" | LC_ALL=C @gnugrep@/bin/grep -Evc '^[[:space:]]*(#.*)?$|^(mode|base_url|model|model_fable|model_opus|model_sonnet|model_haiku|token_env)=[^[:space:]]+$')"
-  [ "$bad" = 0 ] || refuse "$conf: every line must be a comment or key=value with a known key (no spaces, no quotes)"
-  dup="$(printf '%s\n' "$text" | LC_ALL=C @gnugrep@/bin/grep -oE '^[a-z_]+=' | LC_ALL=C @coreutils@/bin/sort | LC_ALL=C @coreutils@/bin/uniq -d)"
-  [ -z "$dup" ] || refuse "$conf: ${dup%=} given twice"
-  settings="$(printf '%s\n' "$text" | LC_ALL=C @gnugrep@/bin/grep -cE '^[a-z_]+=')"
-  modes="$(printf '%s\n' "$text" | LC_ALL=C @gnugrep@/bin/grep -E '^mode=')"
-  case "$modes" in
-    "")                         [ "$settings" = 0 ] && mode=anthropic-only || mode="" ;;  # no mode: the gate decides
-    mode=anthropic-only)        mode=anthropic-only ;;
-    mode=local-with-fallback)   mode=local-with-fallback ;;
-    mode=local-only)            mode=local-only ;;
-    *)                          refuse "$conf: mode must be anthropic-only | local-with-fallback | local-only" ;;
-  esac
-else
-  case "$text" in
-    *"No such file or directory"*) mode=anthropic-only; text="" ;;
-    *) refuse "cannot read $conf: ${text##*: }" ;;
-  esac
+read_conf "$conf"
+mode="$conf_mode"; text="$conf_text"
+
+# A second LifeOS (the launcher honours CLAUDE_CONFIG_DIR) whose inference.conf says something
+# else is ambiguous; refuse rather than ignore it. The same mode, or no file there, is fine.
+other="${CLAUDE_CONFIG_DIR:+$CLAUDE_CONFIG_DIR/LIFEOS/USER/CONFIG/inference.conf}"
+if [ -n "$other" ] && [ "${CLAUDE_CONFIG_DIR%/}" != "$home/.claude" ] && { [ -e "$other" ] || [ -L "$other" ]; }; then
+  read_conf "$other"
+  [ "$conf_mode" = "$mode" ] \
+    || refuse "CLAUDE_CONFIG_DIR's inference.conf says mode=${conf_mode:-unset}, $conf says mode=${mode:-unset}"
 fi
 
 # For Inference.ts: the wrapper's own reading, so in-process code never re-derives the home or
@@ -84,12 +100,11 @@ fi
 gate="$home/.claude/LIFEOS/TOOLS/InferenceProvider.ts"
 [ -f "$gate" ] || refuse "inference mode is ${mode:-unset} but the gate ($gate) is missing"
 
-# Run the gate from / with no bunfig (a project bunfig.toml preload would run inside the
-# decision) and no .env. Protocol on fd 3 only, so nothing a module prints can be eval'd; the
-# last line must be the sentinel, or the gate did not speak the protocol (e.g. an older
-# payload) and we refuse.
+# Run the gate from / with no bunfig and no .env. It decides from the text read above (stdin,
+# no second read) and must agree with this script's mode. Protocol on fd 3 only, so nothing a
+# module prints can be eval'd; the last line must be the sentinel, or the gate did not speak the
+# protocol (e.g. an older payload) and we refuse.
 export HOME="${HOME:-$home}"
-# The gate decides from the text read above (stdin) and must agree with this script's mode.
 code="$(printf '%s\n' "$text" | (cd / && @bun@/bin/bun --no-env-file --config=/dev/null "$gate" gate --conf "$conf" --mode "$mode") 3>&1 1>&2)" || exit 3
 [ "${code##*$'\n'}" = ": lifeos-gate-ok" ] || refuse "inference gate gave no decision (stale LifeOS payload?)"
 # eval's status is the sentinel's (always 0), so prove the delta applies under set -e first.

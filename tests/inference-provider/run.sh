@@ -71,5 +71,5 @@ cd "$ROOT/LIFEOS/TOOLS"
 BUN_DIR="$(dirname "$(command -v bun)")"   # absolute, so the clean env below never depends on the caller's PATH
 env -i PATH="$TREE/home/bin:$BUN_DIR:$PATH" HOME="$TREE/home" TMPDIR="$TREE/tmp" \
   XDG_CACHE_HOME="$TREE/cache" XDG_CONFIG_HOME="$TREE/config" \
-  SPAWNS_FILE="$TREE/home/spawns.jsonl" NOPW_GATE="$TREE/nopw-gate/claude" \
-  bash -c 'mkdir -p "$TMPDIR" && exec bun test InferenceProvider.test.ts'
+  SPAWNS_FILE="$TREE/home/spawns.jsonl" NOPW_GATE="$TREE/nopw-gate/claude" FAKE_REAL_DIR="$TREE/real" \
+  bash -c 'mkdir -p "$TMPDIR" && exec bun test InferenceProvider.test.ts' </dev/null

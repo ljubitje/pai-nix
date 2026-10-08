@@ -41,8 +41,9 @@ WHY THIS SHAPE (Klemen, 2026-10-07)
 FAIL-CLOSED
   - Absent file (ENOENT, and no link to nothing on the path) is anthropic-only; any other read
     error, a line that is not a comment or known_key=value without spaces, a repeated key or a
-    bad value refuses. CR is dropped and NUL becomes a space on both sides.
-  - A CLAUDE_CONFIG_DIR install with its own inference.conf refuses (ambiguous).
+    bad value refuses. NUL becomes a space and CR a line break, on both sides, and both use ASCII
+  character classes only, so the wrapper and parseConf agree on any byte sequence.
+  - A CLAUDE_CONFIG_DIR install whose inference.conf says a different mode refuses (ambiguous).
   - local-only never fails over; an Anthropic hint under local-only refuses.
   - A local mode without a gate file, any gate error, a missing sentinel (e.g. a stale payload)
     or an env delta that does not apply refuses. The gate runs from / with --config=/dev/null
@@ -54,15 +55,25 @@ VERIFIED GOTCHA (why AUTH_TOKEN is always set on the local target)
   that URL (measured 2026-10-04). AUTH_TOKEN outranks OAuth, so a server without auth gets
   "lifeos-local-no-auth", never the subscription credential.
 
+THE BAR (Klemen, 2026-10-08, after eight review rounds)
+  1. anthropic-only behaves as upstream: no regression, ~10 ms per exec with a file present
+     (pure bash after one getent and one tr), plain exec without one.
+  2. Local modes route correctly under normal conditions; plain misconfiguration refuses.
+  Edge cases under local-only belong to the network room, not to more gate code.
+
 KNOWN LIMITS
-  An API-key-only user's fallback has no key (the Anthropic leg runs on the subscription).
+  Accepted under the bar (the room's job): a passwd home that is itself a link to nothing
+  (unmounted /persist); a $HOME other than the passwd home carrying its own LifeOS; a
+  filesystem that fails mid-read in a way that still yields a valid-looking text; a binary that
+  is not the lifeos-nix wrapper (Inference.ts records 'query-failed' and takes the upstream
+  path). An API-key-only user's fallback has no key (the Anthropic leg runs on the subscription).
   Without fallbackTimeoutMs a fallback can take the local timeout plus the Anthropic timeout.
   --config=/dev/null on the gate has no observable effect today (bun loads no global bunfig
   for `bun file.ts`, and the gate runs from /); it stays as a guard.
   Claude Code itself can still reach Anthropic outside the gate's view: the network room's job.
 
 VERIFICATION
-  tests/inference-provider/run.sh — 81 tests against the pinned source + patch list and the
+  tests/inference-provider/run.sh — 87 tests against the pinned source + patch list and the
   real gate script, in env -i with a fake passwd (never the runner's own home): parsing and
   refusals, shell/TS agreement on the same bytes, env overlay/strip, the decide() table, the
   gate end to end (no-bun fast path, env steering, invalid/unreadable files, dangling links,
@@ -70,19 +81,18 @@ VERIFICATION
   GATE=off, unresolvable uid), Inference.ts through the wrapper query. Mutation-checked.
 
 diff --git a/LifeOS/install/LIFEOS/TOOLS/Inference.ts b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
-index b0408f9..439d357 100755
+index b0408f9..52fd2c4 100755
 --- a/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
-@@ -51,6 +51,8 @@ import { join } from "path";
+@@ -51,6 +51,7 @@ import { join } from "path";
  import { homedir, tmpdir } from "os";
  import { randomUUID } from "crypto";
  import { modelForEffort, pinnedModelForEffort, EFFORT_MODEL, UNIFORM_HARNESS_EFFORT, type EffortLevel, type HarnessEffort } from './models';
-+import { spawnSync } from 'child_process';
 +import { ANTHROPIC_ONLY, anthropicEnv, localEnv, localModelFor, parseConf, recordProviderEvent, TARGET_HINT, type ProviderConfig } from './InferenceProvider';
  
  /**
   * Resolve the claude binary explicitly. launchd jobs run with a minimal PATH
-@@ -128,6 +130,11 @@ export interface InferenceResult {
+@@ -128,6 +129,11 @@ export interface InferenceResult {
     * Opus). undefined when executedModel is unknown. Logged to
     * MEMORY/OBSERVABILITY/model-verification.jsonl. */
    modelDowngraded?: boolean;
@@ -94,7 +104,7 @@ index b0408f9..439d357 100755
  }
  
  // Level configurations — models resolve via models.ts EFFORT_MODEL (the single
-@@ -202,12 +209,18 @@ function logModelVerification(entry: Record<string, unknown>): void {
+@@ -202,12 +208,18 @@ function logModelVerification(entry: Record<string, unknown>): void {
  /**
   * Run inference with configurable level
   */
@@ -115,7 +125,7 @@ index b0408f9..439d357 100755
  
    return new Promise((resolve) => {
      // Unset CLAUDECODE so nested `claude` invocations don't trigger the
-@@ -231,6 +244,14 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -231,6 +243,14 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
      // still be targeted after the child loses its credentials above, so every
      // nested call fails auth (401) and retries until timeout. Force real Anthropic API.
      delete env.ANTHROPIC_BASE_URL;
@@ -130,7 +140,7 @@ index b0408f9..439d357 100755
  
      const hasImages = options.imagePaths && options.imagePaths.length > 0;
  
-@@ -273,7 +294,7 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -273,7 +293,7 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
      let stderr = '';
  
      const proc = spawn(resolveClaudeBin(), args, {
@@ -139,7 +149,7 @@ index b0408f9..439d357 100755
        stdio: ['pipe', 'pipe', 'pipe'],
      });
  
-@@ -362,7 +383,8 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -362,7 +382,8 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
        // any silent downgrade. A `max` call that runs Opus instead of Fable is
        // caught HERE instead of being reported as Fable. Logged for max (Fable
        // audit trail) and for any downgrade at any level.
@@ -149,7 +159,7 @@ index b0408f9..439d357 100755
        const { executed: executedModel, downgraded: modelDowngraded } = verifyExecutedModel(envelope.modelUsage, expectedTier);
        if (executedModel && (modelDowngraded || level === 'max')) {
          logModelVerification({ level, requested: model, expected_tier: expectedTier, executed: executedModel, downgraded: !!modelDowngraded, latency_ms: latencyMs });
-@@ -488,11 +510,59 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -488,11 +509,90 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
   * observability.
   */
  export async function inference(options: InferenceOptions): Promise<InferenceResult> {
@@ -159,7 +169,7 @@ index b0408f9..439d357 100755
 +  // every exec from the same file, so this read only orchestrates the fallback.
 +  let provider: ProviderConfig;
 +  try {
-+    provider = providerFromWrapper();
++    provider = await providerFromWrapper();
 +  } catch (e) {
 +    const error = `[Inference] provider config invalid, refusing: ${(e as Error).message}`;
 +    recordProviderEvent({ event: 'config-invalid', error });
@@ -182,21 +192,52 @@ index b0408f9..439d357 100755
 +/**
 + * The provider as the claude wrapper itself reads it (`claude --lifeos-gate-query`), so this
 + * process never re-derives the passwd home (Bun's os.userInfo() returns $HOME) or re-reads the
-+ * file. Exit 3 is the wrapper refusing (invalid/unreadable config): throw. Any other failure
-+ * means a claude without the lifeos-nix gate, which can only reach Anthropic: anthropic-only.
++ * file. Async with a 5 s limit, so a slow passwd lookup never freezes the caller's event loop.
++ * Exit 3 is the wrapper refusing (invalid config): throw. Any other failure (a claude without
++ * the lifeos-nix gate, a timeout) is recorded and treated as "no provider": the upstream path,
++ * where every spawn still goes through whatever the binary is — the gated wrapper re-decides
++ * per exec, an ungated binary was never going to honour inference.conf anyway (review 8).
 + */
-+function providerFromWrapper(): ProviderConfig {
-+  const env = { ...process.env };
-+  delete env.CLAUDECODE;
-+  const r = spawnSync(resolveClaudeBin(), ['--lifeos-gate-query'], { env, encoding: 'utf8', timeout: 10_000 });
-+  if (r.status === 3) throw new Error((r.stderr || 'claude wrapper refused').trim());
-+  const out = r.status === 0 ? r.stdout : '';
-+  const sep = out.indexOf('\n---\n');
-+  if (!out.startsWith('mode=') || sep < 0) return ANTHROPIC_ONLY;
-+  const mode = out.slice('mode='.length, out.indexOf('\n'));
-+  const cfg = parseConf(out.slice(sep + 5), 'inference.conf (via claude --lifeos-gate-query)');
-+  if (mode && cfg.mode !== mode) throw new Error(`wrapper read mode=${mode}, parsed ${cfg.mode}`);
-+  return cfg;
++function providerFromWrapper(): Promise<ProviderConfig> {
++  return new Promise((resolve, reject) => {
++    const env = { ...process.env };
++    delete env.CLAUDECODE;
++    let out = '';
++    let err = '';
++    let proc: ReturnType<typeof spawn>;
++    try {
++      proc = spawn(resolveClaudeBin(), ['--lifeos-gate-query'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
++    } catch (e) {
++      recordProviderEvent({ event: 'query-failed', error: (e as Error).message });
++      return resolve(ANTHROPIC_ONLY);
++    }
++    const timer = setTimeout(() => proc.kill('SIGKILL'), 5000);
++    proc.stdout!.on('data', (d) => { out += d.toString(); });
++    proc.stderr!.on('data', (d) => { err += d.toString(); });
++    proc.on('error', (e) => {
++      clearTimeout(timer);
++      recordProviderEvent({ event: 'query-failed', error: e.message });
++      resolve(ANTHROPIC_ONLY);
++    });
++    proc.on('close', (code, signal) => {
++      clearTimeout(timer);
++      if (code === 3) return reject(new Error(err.trim() || 'claude wrapper refused'));
++      const sep = out.indexOf('\n---\n');
++      if (code !== 0 || !out.startsWith('mode=') || sep < 0) {
++        recordProviderEvent({ event: 'query-failed', code, signal });
++        console.error(`[Inference] claude --lifeos-gate-query gave no answer (code=${code}, signal=${signal}); upstream path`);
++        return resolve(ANTHROPIC_ONLY);
++      }
++      try {
++        const mode = out.slice('mode='.length, out.indexOf('\n'));
++        const cfg = parseConf(out.slice(sep + 5), 'inference.conf (via claude --lifeos-gate-query)');
++        if (mode && cfg.mode !== mode) throw new Error(`wrapper read mode=${mode}, parsed ${cfg.mode}`);
++        resolve(cfg);
++      } catch (e) {
++        reject(e);
++      }
++    });
++  });
 +}
 +
 +async function inferenceOnTarget(options: InferenceOptions, target?: Target): Promise<InferenceResult> {
@@ -210,7 +251,7 @@ index b0408f9..439d357 100755
    if (first.success || level !== 'max') return first;
    // The fallback only buys resilience if it resolves to a DIFFERENT model than
    // the one that just failed. Compare at the TIER level (EFFORT_MODEL), not the
-@@ -507,13 +577,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
+@@ -507,13 +607,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
      EFFORT_MODEL.high !== EFFORT_MODEL.max ? 'high'
      : EFFORT_MODEL.medium !== EFFORT_MODEL.max ? 'medium'
      : 'low';
@@ -230,7 +271,7 @@ index b0408f9..439d357 100755
  }
  
  
-@@ -570,6 +645,9 @@ async function main() {
+@@ -570,6 +675,9 @@ async function main() {
    if (result.executedModel) {
      console.error(`[model] requested=${level} → executed=${result.executedModel}${result.modelDowngraded ? '  ⚠️ DOWNGRADED from requested tier' : ''}`);
    }
@@ -242,10 +283,10 @@ index b0408f9..439d357 100755
      if (expectJson && result.parsed) {
 diff --git a/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
 new file mode 100644
-index 0000000..a672880
+index 0000000..537bbe1
 --- /dev/null
 +++ b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
-@@ -0,0 +1,419 @@
+@@ -0,0 +1,423 @@
 +#!/usr/bin/env bun
 +/**
 + * InferenceProvider.ts — which model server `claude` talks to, decided at every exec.
@@ -402,17 +443,21 @@ index 0000000..a672880
 +}
 +
 +const CONF_KEYS = ["mode", "base_url", "model", "model_fable", "model_opus", "model_sonnet", "model_haiku", "token_env"];
-+const CONF_LINE = /^([a-z_]+)=(\S+)$/;
++// ASCII classes only, matching the wrapper's [[:space:]] under LC_ALL=C (JS \s and . would
++// also treat NBSP, U+FEFF, U+2028 as space or line end, and the two would disagree; review 8).
++const SPACE = " \t\n\v\f\r";
++const CONF_LINE = new RegExp(`^([a-z_]+)=([^${SPACE}]+)$`);
++const SKIP_LINE = new RegExp(`^[${SPACE}]*(#[^\n]*)?$`);
 +
 +/** Pure: inference.conf text → validated config. Every line is a comment, blank, or exactly
 + * `key=value` with a known key; anything else, or a repeated key, throws. The wrapper applies
 + * the same line rule in shell, so both read the file the same way. */
 +export function parseConf(text: string, where = "inference.conf"): ProviderConfig {
 +  const kv: Record<string, string> = {};
-+  // The wrapper's normalisation: CR dropped, NUL turned into a space (which the line rule then
-+  // rejects). Identical here so both read any byte sequence the same way.
-+  text.replace(/\r/g, "").replace(/\0/g, " ").split("\n").forEach((line, i) => {
-+    if (/^\s*(#.*)?$/.test(line)) return;
++  // The wrapper's normalisation (tr '\000\r' ' \n'): NUL becomes a space, which the line rule
++  // then rejects, and CR a line break. Identical here so both read any byte sequence the same way.
++  text.replace(/\0/g, " ").replace(/\r/g, "\n").split("\n").forEach((line, i) => {
++    if (SKIP_LINE.test(line)) return;
 +    const m = line.match(CONF_LINE);
 +    if (!m) throw new Error(`${where}:${i + 1}: expected key=value (no spaces, no quotes)`);
 +    const [, k, v] = m;

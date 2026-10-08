@@ -313,12 +313,14 @@ test("gate: a link to nothing anywhere on the conf path refuses; a missing .clau
   expect(plain.spawns.length).toBe(1);
 });
 
-test("gate: CLAUDE_CONFIG_DIR with its own inference.conf refuses; the same tree or none is fine", async () => {
+test("gate: a CLAUDE_CONFIG_DIR whose inference.conf says another mode refuses; the same mode, the same tree or none is fine", async () => {
   conf("mode=anthropic-only\n");
   const other = join(HOME, "second-lifeos");
   mkdirSync(join(other, "LIFEOS/USER/CONFIG"), { recursive: true });
   writeFileSync(join(other, "LIFEOS/USER/CONFIG/inference.conf"), localConf("local-only"));
   expect((await claude({ CLAUDE_CONFIG_DIR: other })).code).toBe(3);
+  writeFileSync(join(other, "LIFEOS/USER/CONFIG/inference.conf"), "mode=anthropic-only\n");
+  expect((await claude({ CLAUDE_CONFIG_DIR: other })).code).toBe(0);   // two anthropic-only installs
   expect((await claude({ CLAUDE_CONFIG_DIR: join(HOME, ".claude") })).code).toBe(0);
   expect((await claude({ CLAUDE_CONFIG_DIR: join(HOME, "empty-cfgdir") })).code).toBe(0);
 });
@@ -404,36 +406,46 @@ test("gate: LIFEOS_GATE=off — plain claude except where the conf may say local
   }
 });
 
-// The wrapper and parseConf must agree on every file: same verdict, same mode.
-test.each([
-  ["mode=anthropic-only\r\n"],
-  ["# only a comment\r\n\n"],
-  ["mode=anthropic-only\nbase_url=https://api.anthropic.com\n"],
-  ["mode=anthropic-only\nfoo=1\n"],
-  ["mode=anthropic-only\nmode=anthropic-only\n"],
-  ["mode=anthropic-only\nbase_url=http://a\nbase_url=http://b\n"],
-  ["mode=anthropic-\0only\n"],
-  ["#\rcomment\nmode=anthropic-only\n"],
-  ["base_url=http://x\nmodel=m\n"],
-  ["mode=local-only\n"],
-  ["mode = local-only\n"],
-  ["mode=local-only\nbase_url=http://x\nmodel=m\n"],
-])("wrapper and parseConf agree on %j", async (text) => {
+// The wrapper and parseConf must agree on every file, byte for byte: same verdict, same mode,
+// and the text the wrapper hands on (to the gate and to Inference.ts) parses to the same thing.
+const AGREE: string[] = [
+  "mode=anthropic-only\r\n",
+  "# only a comment\r\n\n",
+  "mode=anthropic-only\nbase_url=https://api.anthropic.com\n",
+  "mode=anthropic-only\nfoo=1\n",
+  "mode=anthropic-only\nmode=anthropic-only\n",
+  "mode=anthropic-only\nbase_url=http://a\nbase_url=http://b\n",
+  "mode=anthropic-\0only\n",
+  "#\rcomment\nmode=anthropic-only\n",
+  "mode=anthropic-only\nmodel=a\rb\n",
+  "mode=anthropic-only\n# note \u2028 x\n",
+  "mode=anthropic-only\nbase_url=http://x\u00a0y\n",
+  "\u00a0\nmode=anthropic-only\n",
+  "\ufeffmode=anthropic-only\n",
+  "base_url=http://x\nmodel=m\n",
+  "mode=local-only\n",
+  "mode = local-only\n",
+  "mode=local-only\nbase_url=http://x\nmodel=m\n",
+];
+test.each(AGREE.map((t) => [t]))("wrapper and parseConf agree on %j", async (text) => {
   conf(text);
   reset();
   const q = Bun.spawnSync([GATE, "--lifeos-gate-query"], { env: process.env as any });
-  let ts: string;
-  try { ts = parseConf(text).mode; } catch { ts = "refuse"; }
+  const verdict = (f: () => ProviderConfig) => { try { return f().mode; } catch { return "refuse"; } };
+  const direct = verdict(() => parseConf(text));
   const out = q.stdout.toString();
-  const shellMode = out.match(/^mode=(.*)$/m)?.[1];
-  // The wrapper owns two verdicts — refuse, and anthropic-only (no gate run). For a local or
-  // missing mode it hands the same text to the gate, which parses it with parseConf and must
-  // agree with the mode the wrapper saw.
-  if (q.exitCode === 3) expect(ts).toBe("refuse");
-  else if (shellMode === "anthropic-only") expect(ts).toBe("anthropic-only");
-  else {
-    expect(ts).not.toBe("anthropic-only");
-    if (shellMode && ts !== "refuse") expect(ts).toBe(shellMode);
+  if (q.exitCode === 3) {
+    expect(direct).toBe("refuse");
+  } else {
+    expect(q.exitCode).toBe(0);
+    const shellMode = out.match(/^mode=(.*)$/m)![1];
+    const handedOn = verdict(() => parseConf(out.slice(out.indexOf("\n---\n") + 5)));
+    expect(handedOn).toBe(direct);                           // the text passed on reads the same
+    if (shellMode === "anthropic-only") expect(direct).toBe("anthropic-only");
+    else {
+      expect(direct).not.toBe("anthropic-only");             // the gate would then parse it
+      if (shellMode && direct !== "refuse") expect(direct).toBe(shellMode);
+    }
   }
   expect(spawns().length).toBe(0); // a query never reaches the real binary
   conf(null);
@@ -549,6 +561,20 @@ test("inference reads the mode through the wrapper, so $HOME cannot move it", as
   } finally {
     process.env.HOME = saved;
   }
+});
+
+test("inference: a claude that cannot answer the gate query is recorded, not silently trusted", async () => {
+  conf(localConf("local-only"));
+  reset();
+  // A separate process (Bun.which fixes PATH at start) whose only claude is the ungated fake:
+  // `--lifeos-gate-query` then gets no protocol answer.
+  const p = Bun.spawn(["bun", "-e",
+    'const { inference } = await import("./Inference"); await inference({ systemPrompt: "s", userPrompt: "u", level: "low", timeout: 10000 });'],
+    { cwd: import.meta.dir, stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, FAKE_LOCAL_FAIL: "0", PATH: [process.env.FAKE_REAL_DIR!, Bun.which("bun")!.replace(/\/bun$/, "")].join(":") } as any });
+  await p.exited;
+  expect(events()).toContain("query-failed");
+  expect(await new Response(p.stderr).text()).toMatch(/gave no answer/);
 });
 
 test("inference, invalid config: error, zero spawns", async () => {
