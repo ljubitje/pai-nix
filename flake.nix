@@ -18,7 +18,8 @@
         in
         {
           inherit claude-code;
-          lifeos = pkgs.callPackage ./pkgs/tools/misc/lifeos { inherit claude-code; };
+          # one bun for LifeOS: the one the claude wrapper hands to hooks (claude-code.passthru.bun)
+          lifeos = pkgs.callPackage ./pkgs/tools/misc/lifeos { inherit claude-code; bun = claude-code.passthru.bun; };
         };
 
       # nixosModule that installs the lifeos package system-wide, built from the consumer's pkgs.
@@ -115,11 +116,11 @@
           wantedBy = [ "default.target" ];
           # claude-code included so Pulse cron jobs' Bun.which("claude") resolves
           # under the unit's (replaced, not appended) PATH — ISC-45 for the Pulse consumer.
-          path = [ pkgs.bash pkgs.bun pkgs.git pkgs.coreutils pkgs.curl own.claude-code ];
+          path = [ pkgs.bash own.claude-code.passthru.bun pkgs.git pkgs.coreutils pkgs.curl own.claude-code ];
           serviceConfig = {
             Type = "simple";
             ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p %h/.claude/LIFEOS/PULSE/logs";
-            ExecStart = "${pkgs.bun}/bin/bun run pulse.ts";
+            ExecStart = "${own.claude-code.passthru.bun}/bin/bun run pulse.ts";
             WorkingDirectory = "%h/.claude/LIFEOS/PULSE";
             Restart = "on-failure";
             RestartSec = 30;
