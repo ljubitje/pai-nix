@@ -85,6 +85,37 @@ Each patch is an additive `.patch` with a multi-paragraph header (bug, RCA, fix 
 
 `tests/settings-merge-test.sh` covers the install semantics: a virgin install, a merge that never clobbers pre-existing user values, and idempotent re-installs.
 
+Two more cuts sit on top of the invariant: the `claude` wrapper sets `DISABLE_TELEMETRY` and `DISABLE_ERROR_REPORTING` for every exec (Claude Code's own Datadog/Sentry/GrowthBook reporting), and Pulse no longer loads the tunnel-exposed Siri endpoint (`f-siri-retire`).
+
+---
+
+## Local inference
+
+LifeOS can run on a local, Anthropic-compatible model server instead of — or in front of — Anthropic. One file in the USER zone, `~/.claude/LIFEOS/USER/CONFIG/inference.conf`, one `key=value` per line:
+
+```
+mode=local-with-fallback        # anthropic-only | local-with-fallback | local-only
+base_url=http://host:8000       # must speak Anthropic /v1/messages (OpenAI-only: put a translating proxy in front)
+model=my-model                  # all tiers; model_fable / model_opus / model_sonnet / model_haiku override
+token_env=MY_SERVER_TOKEN       # optional; the env var holding the server's key
+```
+
+| mode | what happens |
+|---|---|
+| no file, or `anthropic-only` | the upstream path: the real `claude` runs unchanged (~10 ms of wrapper per exec, no bun) |
+| `local-with-fallback` | every `claude` goes to the local server while it answers; if it does not, that `claude` runs on Anthropic with a notice. `Inference.ts` retries a failed local call once on Anthropic. |
+| `local-only` | always local, never Anthropic, even when the server is down; WebFetch, claude.ai MCP and nonessential traffic are off |
+
+How it works: the lifeos-nix `claude` (`pkgs/tools/misc/claude-code/claude-gate.sh`) reads `inference.conf` once, in shell, from the account's passwd home, before every exec of the real binary, so the launcher, Pulse, hooks, skills and a bare `claude` all pass through it. Local modes hand the text to `InferenceProvider.ts`, which sets the env (server URL, model names per tier, a credential). Anything it cannot read exactly (unknown key, typo, repeated key, unreadable file, a `token_env` that is not set) refuses instead of guessing. Edit the file and the next `claude` follows it; `LIFEOS_GATE=off` bypasses the gate, except where the file says `local-only`.
+
+Things worth knowing:
+
+- **No Anthropic login needed for local modes.** The gate always sets `ANTHROPIC_AUTH_TOKEN`, which Claude Code treats as authentication, so a first run shows the theme and folder-trust screens and no login step. Without a subscription, use `local-only`: `local-with-fallback` would fall back to an Anthropic it cannot reach.
+- **Your subscription token never reaches the local server.** With only `ANTHROPIC_BASE_URL` set, Claude Code sends the OAuth bearer to that URL (measured); the always-set `ANTHROPIC_AUTH_TOKEN` outranks it.
+- **The gate routes; it is not a sandbox.** Claude Code itself can still reach Anthropic outside the gate's view (telemetry it does not gate, OAuth refresh, its own subcommands). A network-level guarantee for `local-only` is planned and deferred. The accepted limits are listed in the header of `f-inference-provider.patch`.
+
+`tests/inference-provider/run.sh` runs 112 tests against the pinned source plus the patch list and the real gate script, in `env -i` with a fake passwd so nothing touches the runner's own home: parsing and refusals, shell/TypeScript agreement on the same bytes (C and UTF-8 locales), the routing table, the gate end to end, and `Inference.ts` through the gate. Mutation-checked.
+
 ---
 
 ## Design principles
@@ -119,6 +150,12 @@ Still owed: decide, once the report has been lived with, whether removal becomes
 `--prune` with per-class confirmation or stays manual. Deleting on sync is destructive against a
 tree that also holds files the user owns, which is why reporting came first.
 
+**7.40.4.23 — local inference.** `inference.conf` with three modes, routed at every `claude` exec
+(see *Local inference*), Siri retired, Claude Code telemetry off. Reached after ten review
+rounds, the last of which found nothing against the agreed bar: `anthropic-only` behaves as
+upstream, local modes route correctly under normal conditions, misconfiguration refuses.
+Deferred: the network room that would make `local-only` a guarantee rather than routing.
+
 ---
 
 ## Repository structure
@@ -133,9 +170,11 @@ lifeos-nix/
 │   │   ├── files/                  # DerivedWatch module, copied into the payload at installPhase
 │   │   └── vendor-locks/           # Injected bun lockfiles + hashes
 │   └── claude-code/                # Vendored claude-code derivation + pinned manifest.json + update.sh
+│                                   #   + claude-gate.sh, the inference gate installed as bin/claude
 ├── tests/
 │   ├── egress-test.sh              # Privacy invariant (deny-all netns + strace)
-│   └── settings-merge-test.sh      # Merge-safe install semantics
+│   ├── settings-merge-test.sh      # Merge-safe install semantics
+│   └── inference-provider/         # Inference gate: run.sh + 112 tests
 ├── README.md                       # this file
 └── LICENSE                         # AGPL-3.0
 ```
