@@ -6,10 +6,26 @@
   };
   outputs = { self, nixpkgs, flake-utils }:
     let
-      # nixosModule that installs the lifeos package system-wide.
-      lifeosModule = { pkgs, system ? pkgs.stdenv.hostPlatform.system, ... }: {
+      # The package set is a function of a nixpkgs, not a fixed output of this flake's own pin.
+      # The NixOS module calls it with the CONSUMER'S pkgs, so bun, node, git and every other
+      # dependency are the system's on every machine, with no `lifeos.inputs.nixpkgs.follows`
+      # line the consumer could forget (found 2026-10-08: a build from this flake's own lock
+      # carried bun 1.3.13 while the system ran 1.4.2). `packages.*` below still feeds it this
+      # flake's pin, for `nix build` on its own.
+      mkPackages = pkgs:
+        let
+          claude-code = pkgs.callPackage ./pkgs/tools/misc/claude-code { };
+        in
+        {
+          inherit claude-code;
+          lifeos = pkgs.callPackage ./pkgs/tools/misc/lifeos { inherit claude-code; };
+        };
+
+      # nixosModule that installs the lifeos package system-wide, built from the consumer's pkgs.
+      lifeosModule = { pkgs, system ? pkgs.stdenv.hostPlatform.system, ... }:
+      let own = mkPackages pkgs; in {
         environment.systemPackages = [
-          self.packages.${pkgs.stdenv.hostPlatform.system}.default
+          own.lifeos
           # LifeOS ships ~600 .ts files (hooks, LIFEOS/TOOLS, skill tools) that bun
           # executes by stripping types — so nothing ever type-checks them unless a
           # checker exists. Without this, `tsc` is absent and the only way to run one
@@ -92,7 +108,7 @@
           wantedBy = [ "default.target" ];
           # claude-code included so Pulse cron jobs' Bun.which("claude") resolves
           # under the unit's (replaced, not appended) PATH — ISC-45 for the Pulse consumer.
-          path = [ pkgs.bash pkgs.bun pkgs.git pkgs.coreutils pkgs.curl self.packages.${pkgs.stdenv.hostPlatform.system}.claude-code ];
+          path = [ pkgs.bash pkgs.bun pkgs.git pkgs.coreutils pkgs.curl own.claude-code ];
           serviceConfig = {
             Type = "simple";
             ExecStartPre = "${pkgs.coreutils}/bin/mkdir -p %h/.claude/LIFEOS/PULSE/logs";
@@ -113,10 +129,8 @@
         pkgs = import nixpkgs { inherit system; config.allowUnfree = true; };
         # SoT: lifeos-nix owns the claude-code version pin (vendored derivation +
         # manifest.json), not raw nixpkgs. Bump: ./pkgs/tools/misc/claude-code/update.sh <version>.
-        claude-code = pkgs.callPackage ./pkgs/tools/misc/claude-code { };
-        lifeos = pkgs.callPackage ./pkgs/tools/misc/lifeos {
-          inherit claude-code;
-        };
+        own = mkPackages pkgs;
+        inherit (own) claude-code lifeos;
       in
       {
         packages.claude-code = claude-code;
