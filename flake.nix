@@ -14,10 +14,11 @@
       # flake's pin, for `nix build` on its own.
       mkPackages = pkgs:
         let
-          claude-code = pkgs.callPackage ./pkgs/tools/misc/claude-code { };
+          bun = pkgs.callPackage ./pkgs/tools/misc/bun { };
+          claude-code = pkgs.callPackage ./pkgs/tools/misc/claude-code { inherit bun; };
         in
         {
-          inherit claude-code;
+          inherit bun claude-code;
           # one bun for LifeOS: the one the claude wrapper hands to hooks (claude-code.passthru.bun)
           lifeos = pkgs.callPackage ./pkgs/tools/misc/lifeos { inherit claude-code; bun = claude-code.passthru.bun; };
         };
@@ -146,7 +147,7 @@
         packages.default = lifeos;
         # Convenience: `nix develop` drops you into a shell with bun + git ready.
         devShells.default = pkgs.mkShell {
-          packages = [ pkgs.bun pkgs.git ];
+          packages = [ own.bun pkgs.git ];
         };
       }
     ) // {
