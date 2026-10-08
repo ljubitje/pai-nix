@@ -81,14 +81,14 @@ VERIFICATION
   GATE=off, unresolvable uid), Inference.ts through the wrapper query. Mutation-checked.
 
 diff --git a/LifeOS/install/LIFEOS/TOOLS/Inference.ts b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
-index b0408f9..52fd2c4 100755
+index b0408f9..b223d0b 100755
 --- a/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 @@ -51,6 +51,7 @@ import { join } from "path";
  import { homedir, tmpdir } from "os";
  import { randomUUID } from "crypto";
  import { modelForEffort, pinnedModelForEffort, EFFORT_MODEL, UNIFORM_HARNESS_EFFORT, type EffortLevel, type HarnessEffort } from './models';
-+import { ANTHROPIC_ONLY, anthropicEnv, localEnv, localModelFor, parseConf, recordProviderEvent, TARGET_HINT, type ProviderConfig } from './InferenceProvider';
++import { ANTHROPIC_ONLY, anthropicEnv, localEnv, localModelFor, missingToken, parseConf, recordProviderEvent, TARGET_HINT, type ProviderConfig } from './InferenceProvider';
  
  /**
   * Resolve the claude binary explicitly. launchd jobs run with a minimal PATH
@@ -159,7 +159,7 @@ index b0408f9..52fd2c4 100755
        const { executed: executedModel, downgraded: modelDowngraded } = verifyExecutedModel(envelope.modelUsage, expectedTier);
        if (executedModel && (modelDowngraded || level === 'max')) {
          logModelVerification({ level, requested: model, expected_tier: expectedTier, executed: executedModel, downgraded: !!modelDowngraded, latency_ms: latencyMs });
-@@ -488,11 +509,90 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -488,11 +509,95 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
   * observability.
   */
  export async function inference(options: InferenceOptions): Promise<InferenceResult> {
@@ -176,6 +176,11 @@ index b0408f9..52fd2c4 100755
 +    return { success: false, output: '', error, latencyMs: 0, level: normalizeLevel(options.level) };
 +  }
 +  if (provider.mode === 'anthropic-only') return inferenceOnTarget(options);
++  const missing = missingToken(provider, process.env);
++  if (missing) {
++    recordProviderEvent({ event: 'config-invalid', error: missing });
++    return { success: false, output: '', error: `[Inference] ${missing}`, latencyMs: 0, level: normalizeLevel(options.level) };
++  }
 +
 +  const local = await inferenceOnTarget(options, provider);
 +  if (local.success || provider.mode === 'local-only') return { ...local, provider: 'local' };
@@ -251,7 +256,7 @@ index b0408f9..52fd2c4 100755
    if (first.success || level !== 'max') return first;
    // The fallback only buys resilience if it resolves to a DIFFERENT model than
    // the one that just failed. Compare at the TIER level (EFFORT_MODEL), not the
-@@ -507,13 +607,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
+@@ -507,13 +612,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
      EFFORT_MODEL.high !== EFFORT_MODEL.max ? 'high'
      : EFFORT_MODEL.medium !== EFFORT_MODEL.max ? 'medium'
      : 'low';
@@ -271,7 +276,7 @@ index b0408f9..52fd2c4 100755
  }
  
  
-@@ -570,6 +675,9 @@ async function main() {
+@@ -570,6 +680,9 @@ async function main() {
    if (result.executedModel) {
      console.error(`[model] requested=${level} → executed=${result.executedModel}${result.modelDowngraded ? '  ⚠️ DOWNGRADED from requested tier' : ''}`);
    }
@@ -283,10 +288,10 @@ index b0408f9..52fd2c4 100755
      if (expectJson && result.parsed) {
 diff --git a/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
 new file mode 100644
-index 0000000..8f20f19
+index 0000000..f82038b
 --- /dev/null
 +++ b/LifeOS/install/LIFEOS/TOOLS/InferenceProvider.ts
-@@ -0,0 +1,426 @@
+@@ -0,0 +1,435 @@
 +#!/usr/bin/env bun
 +/**
 + * InferenceProvider.ts — which model server `claude` talks to, decided at every exec.
@@ -512,6 +517,13 @@ index 0000000..8f20f19
 +  return (local.tokenEnv && env[local.tokenEnv]) || PLACEHOLDER_TOKEN;
 +}
 +
++/** A token_env that names an unset or empty variable is a misconfiguration (a typo, a key not
++ * exported): refuse with its name rather than send the placeholder and look "down" (review 9). */
++export function missingToken(cfg: ProviderConfig, env: Env): string | undefined {
++  const t = cfg.local?.tokenEnv;
++  return t && !env[t] ? `token_env=${t} names a variable that is not set` : undefined;
++}
++
 +/**
 + * Overlay the local target onto an env. ANTHROPIC_AUTH_TOKEN is ALWAYS set: it outranks the
 + * subscription OAuth credential, so the OAuth token can never be sent to the local server.
@@ -633,6 +645,8 @@ index 0000000..8f20f19
 +  delete clean[TARGET_HINT];
 +
 +  if (cfg.mode === "anthropic-only") return { action: "exec", env: anthropicEnv(clean) };
++  const missing = missingToken(cfg, clean);
++  if (missing && hint !== "anthropic") return { action: "refuse", reason: missing };
 +  if (cfg.mode === "local-only") {
 +    if (hint === "anthropic") return { action: "refuse", reason: "inference mode is local-only — Anthropic is not allowed" };
 +    return { action: "exec", env: localEnv(clean, cfg) };

@@ -154,6 +154,16 @@ test.each([
   if (d.action === "exec") expect(d.env.LIFEOS_INFERENCE_TARGET).toBeUndefined();
 });
 
+test("decide: a token_env naming an unset variable refuses (a typo is not 'server down')", async () => {
+  const cfg = () => resolveProviderConfig({ ...LOCAL, local: { ...LOCAL.local, token_env: "ISKRA_TOKN" } });
+  const d = await decide({}, cfg, up);
+  expect(d.action).toBe("refuse");
+  if (d.action === "refuse") expect(d.reason).toMatch(/ISKRA_TOKN/);
+  expect((await decide({ ISKRA_TOKN: "x" }, cfg, up)).action).toBe("exec");
+  // The explicit Anthropic leg of a fallback does not need the local token.
+  expect((await decide({ LIFEOS_INFERENCE_TARGET: "anthropic" }, cfg, up)).action).toBe("exec");
+});
+
 test("decide: invalid config refuses", async () => {
   const d = await decide({}, () => { throw new Error("boom"); }, up);
   expect(d.action).toBe("refuse");
@@ -590,6 +600,14 @@ test("inference: a claude that cannot answer the gate query is recorded, not sil
   await p.exited;
   expect(events()).toContain("query-failed");
   expect(await new Response(p.stderr).text()).toMatch(/gave no answer/);
+});
+
+test("inference: a token_env naming an unset variable is an error, not a fallback", async () => {
+  conf(`mode=local-with-fallback\nbase_url=${base()}\nmodel=big-local\ntoken_env=ISKRA_TOKN\n`);
+  const r = await infer();
+  expect(r.success).toBe(false);
+  expect(r.error).toMatch(/ISKRA_TOKN/);
+  expect(spawns().length).toBe(0);
 });
 
 test("inference, invalid config: error, zero spawns", async () => {
