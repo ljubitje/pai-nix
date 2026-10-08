@@ -74,6 +74,9 @@ stdenv.mkDerivation (finalAttrs: {
             procps
             # https://code.claude.com/docs/en/troubleshooting#search-and-discovery-issues
             ripgrep
+            # LifeOS hooks are `#!/usr/bin/env bun` scripts; claude runs them with its own PATH, so a
+            # claude not started by the `lifeos` launcher (Pulse, Inference.ts, bare `claude`) needs bun here
+            bun
           ]
           # the following packages are required for the sandbox to work (Linux only)
           ++ lib.optionals stdenv.hostPlatform.isLinux [
