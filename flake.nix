@@ -12,8 +12,17 @@
       # line the consumer could forget (found 2026-10-08: a build from this flake's own lock
       # carried bun 1.3.13 while the system ran 1.4.2). `packages.*` below still feeds it this
       # flake's pin, for `nix build` on its own.
-      mkPackages = pkgs:
+      #
+      # Same nixpkgs REVISION as the consumer (`pkgs.path`), re-imported with unfree allowed:
+      # claude-code is unfree, and this flake has always carried that itself, so a consumer
+      # without `nixpkgs.config.allowUnfree` must keep working. The consumer's overlays and
+      # config are deliberately not inherited; the revision is what has to match.
+      mkPackages = consumerPkgs:
         let
+          pkgs = import consumerPkgs.path {
+            system = consumerPkgs.stdenv.hostPlatform.system;
+            config.allowUnfree = true;
+          };
           claude-code = pkgs.callPackage ./pkgs/tools/misc/claude-code { };
         in
         {
