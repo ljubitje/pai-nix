@@ -42,8 +42,10 @@ FAIL-CLOSED
   - Absent file (ENOENT, and no link to nothing on the path) is anthropic-only; any other read
     error, a line that is not a comment or known_key=value without spaces, a repeated key or a
     bad value refuses. NUL becomes a space and CR a line break, on both sides, and both use ASCII
-  character classes only, so the wrapper and parseConf agree on any byte sequence.
-  - A CLAUDE_CONFIG_DIR install whose inference.conf says a different mode refuses (ambiguous).
+    character classes only, so the wrapper and parseConf agree on any byte sequence.
+  - A CLAUDE_CONFIG_DIR install whose inference.conf has other settings refuses (ambiguous);
+    the same tree, no file there, both anthropic-only or the same settings are fine.
+  - A token_env naming an unset variable refuses (a typo is not "server down").
   - local-only never fails over; an Anthropic hint under local-only refuses.
   - A local mode without a gate file, any gate error, a missing sentinel (e.g. a stale payload)
     or an env delta that does not apply refuses. The gate runs from / with --config=/dev/null
@@ -73,7 +75,7 @@ KNOWN LIMITS
   Claude Code itself can still reach Anthropic outside the gate's view: the network room's job.
 
 VERIFICATION
-  tests/inference-provider/run.sh — 111 tests against the pinned source + patch list and the
+  tests/inference-provider/run.sh — 112 tests against the pinned source + patch list and the
   real gate script, in env -i with a fake passwd (never the runner's own home): parsing and
   refusals, shell/TS agreement on the same bytes, env overlay/strip, the decide() table, the
   gate end to end (no-bun fast path, env steering, invalid/unreadable files, dangling links,
@@ -81,7 +83,7 @@ VERIFICATION
   GATE=off, unresolvable uid), Inference.ts through the wrapper query. Mutation-checked.
 
 diff --git a/LifeOS/install/LIFEOS/TOOLS/Inference.ts b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
-index b0408f9..fdf4fd5 100755
+index b0408f9..67d61f4 100755
 --- a/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 +++ b/LifeOS/install/LIFEOS/TOOLS/Inference.ts
 @@ -51,6 +51,7 @@ import { join } from "path";
@@ -159,7 +161,7 @@ index b0408f9..fdf4fd5 100755
        const { executed: executedModel, downgraded: modelDowngraded } = verifyExecutedModel(envelope.modelUsage, expectedTier);
        if (executedModel && (modelDowngraded || level === 'max')) {
          logModelVerification({ level, requested: model, expected_tier: expectedTier, executed: executedModel, downgraded: !!modelDowngraded, latency_ms: latencyMs });
-@@ -488,11 +509,98 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
+@@ -488,11 +509,99 @@ async function inferenceAttempt(options: InferenceOptions, modelOverride?: strin
   * observability.
   */
  export async function inference(options: InferenceOptions): Promise<InferenceResult> {
@@ -221,7 +223,8 @@ index b0408f9..fdf4fd5 100755
 +    // two reads and hand parseConf a different model name than the gate saw (review 9).
 +    proc.stdout!.setEncoding('utf8');
 +    proc.stdout!.on('data', (d) => { out += d; });
-+    proc.stderr!.on('data', (d) => { err += d.toString(); });
++    proc.stderr!.setEncoding('utf8');
++    proc.stderr!.on('data', (d) => { err += d; });
 +    proc.on('error', (e) => {
 +      clearTimeout(timer);
 +      recordProviderEvent({ event: 'query-failed', error: e.message });
@@ -259,7 +262,7 @@ index b0408f9..fdf4fd5 100755
    if (first.success || level !== 'max') return first;
    // The fallback only buys resilience if it resolves to a DIFFERENT model than
    // the one that just failed. Compare at the TIER level (EFFORT_MODEL), not the
-@@ -507,13 +615,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
+@@ -507,13 +616,18 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
      EFFORT_MODEL.high !== EFFORT_MODEL.max ? 'high'
      : EFFORT_MODEL.medium !== EFFORT_MODEL.max ? 'medium'
      : 'low';
@@ -279,7 +282,7 @@ index b0408f9..fdf4fd5 100755
  }
  
  
-@@ -570,6 +683,9 @@ async function main() {
+@@ -570,6 +684,9 @@ async function main() {
    if (result.executedModel) {
      console.error(`[model] requested=${level} → executed=${result.executedModel}${result.modelDowngraded ? '  ⚠️ DOWNGRADED from requested tier' : ''}`);
    }
