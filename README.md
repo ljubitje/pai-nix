@@ -47,7 +47,9 @@ nix run git+https://codeberg.org/ljubitje/lifeos-nix#lifeos
 ## What's inside
 
 - **LifeOS v7.40.4** — fetched from `danielmiessler/LifeOS` at the pinned `v7.40.4` release tag (`be9e8ef`) as a fixed source, hash-locked.
-- **`claude-code` pinned as source-of-truth** — a vendored derivation (`pkgs/tools/misc/claude-code/`) plus the official upstream `manifest.json` pin the exact `claude` CLI version, decoupled from the nixpkgs channel and multi-arch (the manifest carries every platform; `eachDefaultSystem` builds only the consumer's). `nixosModules.lifeos` puts it on the system `PATH` and in the Pulse unit's `PATH`. Bump: `pkgs/tools/misc/claude-code/update.sh <version>`, then rebuild — `versionCheckHook` verifies the pin at build.
+- **`claude-code` pinned as source-of-truth** — a vendored derivation (`pkgs/tools/misc/claude-code/`) plus the official upstream `manifest.json` pin the exact `claude` CLI version, decoupled from the nixpkgs channel and multi-arch (the manifest carries every platform; `eachDefaultSystem` builds only the consumer's). `nixosModules.lifeos` puts it on the system `PATH` and in the Pulse unit's `PATH`. Bump: `pkgs/tools/misc/claude-code/update.sh <version>`, then rebuild — `versionCheckHook` verifies the pin at build. The wrapper also puts the pinned bun on `PATH` as a **suffix** (hooks are `#!/usr/bin/env bun` scripts, and a `claude` not started by the `lifeos` launcher — Pulse, `Inference.ts`, a bare `claude` — would otherwise fail every hook with `env: 'bun': No such file or directory`); a suffix, so a project's own devshell bun still wins.
+- **`bun` pinned as source-of-truth** — nixpkgs' bun recipe vendored whole at `pkgs/tools/misc/bun/` (1.4.2; the whole recipe, because the release asset changes between versions), so every machine runs the same bun whatever nixpkgs revision it carries. `claude-code.passthru.bun` is the single handle: the `lifeos` derivation, the Pulse unit (`path` and `ExecStart`), the launcher and the devShell all take bun from it. Bumping bun means copying the newer recipe over, then running `tests/vendor-hashes-test.sh` — the vendored `node_modules` trees are fixed-output derivations, and a cached one hides a bun change (see below).
+- **The module builds from *your* `pkgs`** — `nixosModules.lifeos` calls `mkPackages` with the consumer's `pkgs`, not this flake's own nixpkgs pin, so no `lifeos.inputs.nixpkgs.follows` line is needed for consistency. `claude-code` is unfree, and the module says so instead of switching the gate off internally: it asserts `nixpkgs.config.allowUnfree` (or an `allowUnfreePredicate` that allows it) and fails with a readable message otherwise.
 - **Reproducible vendored dependencies** — one fixed-output derivation per `package.json` tree (root, TOOLS, PULSE, PULSE/Observability, TOOLS/TokenXray, plus the Evals and Prompting skill trees), built with `--frozen-lockfile --ignore-scripts` and `NEXT_TELEMETRY_DISABLED=1`. No runtime `bun install`, no postinstall beacons. Skill trees that reach non-Anthropic services (image-gen, scraping) are deliberately not vendored. Hashes captured for `x86_64-linux` (`vendor-locks/`), from-scratch reproducibility verified.
 - **`fabric` + `yt-dlp` on the system `PATH`** — upstream documents `fabric -y URL` as the transcript path in six skills but never ships the tool, so a fresh install ENOENTs and falls back to scraping the YouTube page. `nixosModules.lifeos` installs both, creates `~/.config/fabric/.env` via tmpfiles (`f`, never `f+` — fabric refuses to start without the file, and truncating it would wipe a user's keys). One upstream defect is left standing on purpose and documented in `flake.nix`: with stdin left open fabric blocks forever, so programmatic callers must pass `< /dev/null`. Guard: `tests/fabric-test.sh`.
 - **A thirteen-patch set** (all listed below) — privacy kills and a graceful-shutdown fix, plus Linux/Pulse runtime fixes and override composition.
@@ -123,7 +125,8 @@ Things worth knowing:
 - **Transparency over runtime patching.** Every upstream modification is an auditable `.patch`. Build-time mutations are documented inline in `default.nix`.
 - **Privacy is a test, not a hope.** The egress invariant is asserted against the *built tree*, not the live install.
 - **Reproducible, offline, hermetic.** No network at build time beyond the hash-locked sources and vendored FOD trees; `--ignore-scripts` keeps postinstall beacons out of the hash.
-- **Pins are owned here.** Both the LifeOS payload and the `claude-code` CLI are pinned in this repo as source-of-truth, not inherited from a moving channel.
+- **Pins are owned here.** The LifeOS payload, the `claude-code` CLI and the `bun` they run on are pinned in this repo as source-of-truth, not inherited from a moving channel.
+- **Consent is explicit.** Unfree software is never allowed behind the consumer's back; the module asserts the consumer's own `allowUnfree` choice.
 - **Brand ≠ path.** The rename touches branding and flake outputs only — the config root stays `~/.claude` because Claude Code hardcodes it.
 
 ---
@@ -150,6 +153,8 @@ Still owed: decide, once the report has been lived with, whether removal becomes
 `--prune` with per-class confirmation or stays manual. Deleting on sync is destructive against a
 tree that also holds files the user owns, which is why reporting came first.
 
+**bun pin + hook PATH (2026-10-08, deployed; not yet versioned).** Since the inference-gate update, hooks failed with `env: 'bun': No such file or directory` in any session not started by `lifeos`: bun reached `PATH` only through the launcher. Fixed in layers: the claude wrapper suffixes bun onto `PATH`; bun itself is pinned here (1.4.2) and shared through `claude-code.passthru.bun`; the module builds from the consumer's `pkgs` and asserts `allowUnfree`. Guard: `tests/vendor-hashes-test.sh` rebuilds all seven `lifeos-deps-*` trees under the pinned bun and compares them with their declared hashes, with a control that must fail on a wrong hash (7/7 pass, ~5 min, needs network). `lifeos` is still 7.40.4.23 — these are packaging changes without a version bump; a `.24` is owed. Not yet seen: a fresh bare-`claude` session confirming the hook error is gone.
+
 **7.40.4.23 — local inference.** `inference.conf` with three modes, routed at every `claude` exec
 (see *Local inference*), Siri retired, Claude Code telemetry off. Reached after ten review
 rounds, the last of which found nothing against the agreed bar: `anthropic-only` behaves as
@@ -169,11 +174,13 @@ lifeos-nix/
 │   │   ├── patches/                # The load-bearing patch set
 │   │   ├── files/                  # DerivedWatch module, copied into the payload at installPhase
 │   │   └── vendor-locks/           # Injected bun lockfiles + hashes
-│   └── claude-code/                # Vendored claude-code derivation + pinned manifest.json + update.sh
-│                                   #   + claude-gate.sh, the inference gate installed as bin/claude
+│   ├── claude-code/                # Vendored claude-code derivation + pinned manifest.json + update.sh
+│   │                               #   + claude-gate.sh, the inference gate installed as bin/claude
+│   └── bun/                        # bun 1.4.2, nixpkgs recipe vendored whole; the one bun LifeOS runs on
 ├── tests/
 │   ├── egress-test.sh              # Privacy invariant (deny-all netns + strace)
 │   ├── settings-merge-test.sh      # Merge-safe install semantics
+│   ├── vendor-hashes-test.sh       # Every lifeos-deps-* tree reproduces its hash under the pinned bun (with a control)
 │   └── inference-provider/         # Inference gate: run.sh + 112 tests
 ├── README.md                       # this file
 └── LICENSE                         # AGPL-3.0
